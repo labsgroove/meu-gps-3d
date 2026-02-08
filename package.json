@@ -4,15 +4,24 @@
   "main": "index.js",
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
     "web": "expo start --web"
   },
   "dependencies": {
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.5.0",
+    "@turf/turf": "^7.3.4",
     "expo": "~54.0.33",
+    "expo-location": "^19.0.8",
     "expo-status-bar": "~3.0.9",
+    "expo-three": "^2.2.1",
     "react": "19.1.0",
-    "react-native": "0.81.5"
+    "react-dom": "^19.1.0",
+    "react-native": "0.81.5",
+    "react-native-maps": "1.20.1",
+    "react-native-web": "^0.21.0",
+    "three": "^0.166.1"
   },
   "private": true
 }
