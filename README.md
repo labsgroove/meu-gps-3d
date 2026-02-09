@@ -1,218 +1,215 @@
-# Meu GPS 3D - Visualizador de Mapa 3D em Tempo Real
+# 🗺️ Meu GPS 3D - Web Edition
 
-Aplicação React Native que exibe um ambiente 3D espelhado em tempo real, com dados de mapa do OpenStreetMap integrados via API Overpass.
+Uma aplicação web moderna para visualizar mapas 3D de cidades usando dados reais do OpenStreetMap. Construída com **React**, **Vite**, **Three.js** e **React Three Fiber**.
 
-## 🎯 Funcionalidades
+## ✨ Características
 
-### ✅ Implementadas
-- **Mapa 3D em Tempo Real**: Renderização dinâmica de prédios, ruas e amenidades baseado na sua localização GPS
-- **Localização Contínua**: Monitoramento de posição com atualização automática do mapa
-- **Controles de Câmera**:
-  - **Arrastar com mouse**: Rotaciona a visualização
-  - **Scroll/Roda do mouse**: Zoom in/out
-  - **Clique direito + arrastar**: Pan (movimento lateral)
-- **Cores Diferenciadas**:
-  - **Prédios**: Diferentes cores por tipo (residencial, comercial, industrial, etc.)
-  - **Ruas**: Cores por tipo (motorway, primary, secondary, residential)
-  - **Amenidades**: Cores por tipo (hospital, escola, restaurante, parque, etc.)
-- **Iluminação Realista**: Ambient light, directional light e hemisphere light
-- **Grid de Referência**: Visualização para orientação espacial
-- **Informações em Tempo Real**: Exibe coordenadas, quantidade de prédios e ruas carregados
+- 🌍 **Dados Reais**: Integração com OpenStreetMap via Overpass API
+- 🏢 **Prédios 3D**: Renderização de edifícios com alturas reais
+- 🛣️ **Estradas Realistas**: Vias com larguras apropriadas e cores diferenciadas
+- 🎯 **Alinhamento Inteligente**: Prédios orientados perpendicularmente às ruas
+- 🎮 **Controles Interativos**: Rotação com mouse, zoom com scroll
+- 🎨 **Visualização Rica**: Cores diferenciadas por tipo de estrutura
+- 📱 **Responsivo**: Funciona em desktop, tablet e mobile
 
-## 📁 Estrutura de Arquivos
+## 🚀 Quick Start
+
+### Instalação
+```bash
+npm install
+```
+
+### Desenvolvimento
+```bash
+npm run dev
+```
+Abre automaticamente em `http://localhost:3000`
+
+### Build para Produção
+```bash
+npm run build
+```
+
+### Preview do Build
+```bash
+npm run preview
+```
+
+### Scripts Rápidos
+```bash
+./start.sh  # Instala e inicia tudo de uma vez
+```
+
+## 📂 Estrutura do Projeto
 
 ```
 meu-gps-3d/
-├── App.js                          # Componente principal
+├── index.html              # Página HTML principal
+├── App.web.jsx             # Componente raiz da aplicação
+├── App.web.css             # Estilos globais
+├── index.web.jsx           # Ponto de entrada React
+├── vite.config.js          # Configuração do Vite
 ├── components/
-│   └── Map3DScene.js              # Cena 3D com Three.js/Fiber
+│   └── Map3DScene.web.jsx  # Componente 3D (Three.js + React Three Fiber)
 ├── services/
-│   └── osmService.js              # Integração com OpenStreetMap
+│   └── osmService.js       # Integração com Overpass API
 ├── utils/
-│   └── geoUtils.js                # Utilitários geoespaciais
-├── package.json                    # Dependências
-└── README.md                       # Este arquivo
+│   └── geoUtils.js         # Utilitários geoespaciais
+├── config/
+│   └── mapConfig.js        # Configurações do mapa
+└── assets/
+    └── favicon.png         # Ícone da aplicação
 ```
 
-## 🚀 Instalação e Uso
+## 🔧 Tecnologias
 
-### Pré-requisitos
-- Node.js 16+
-- npm ou yarn
-- Dispositivo/emulador Android ou iOS com GPS
+| Tecnologia | Uso |
+|-----------|-----|
+| **React 19** | Framework UI |
+| **Vite 5** | Bundler e dev server |
+| **Three.js** | Renderização 3D |
+| **React Three Fiber** | React renderer para Three.js |
+| **Drei** | Componentes úteis para Three.js |
+| **Turf.js** | Operações geoespaciais |
 
-### Instalação
+## 🗺️ Fonte de Dados
 
-```bash
-# Clonar ou acessar o projeto
-cd meu-gps-3d
+- **OpenStreetMap** (OSM): Dados geográficos abertos
+- **Overpass API**: Query engine para OSM
+- **Localização Padrão**: São Paulo, Brasil (-23.5505, -46.6333)
+- **Raio de Busca**: 0.5 km
 
-# Instalar dependências
-npm install
+### Tipos de Dados Renderizados
 
-# Para Android
-npm run android
+- **Prédios**: Forma com altura real, coloridos por tipo (residencial, comercial, etc)
+- **Estradas/Vias**: Malha de transporte com largura apropriada
+- **Amenidades**: Pontos de interesse (escolas, hospitais, parques, etc)
 
-# Para iOS
-npm run ios
+## 🎮 Controles
 
-# Para Web (teste)
-npm run web
-```
+| Ação | Descrição |
+|------|-----------|
+| **Arraste (mouse)** | Rotacionar a câmera ao redor do mapa |
+| **Scroll/Wheel** | Zoom in/out |
+| **Botão direito + arraste** | Deslocar a câmera |
 
-### Requisições de Permissão
-- **GPS**: Necessário para localização em tempo real
-- **Acesso à Internet**: Para buscar dados do OpenStreetMap
+## ⚙️ Configuração
 
-## 🎨 Esquema de Cores
+### Alterar Localização Padrão
 
-### Tipos de Prédios
-| Tipo | Cor | Hex |
-|------|-----|-----|
-| Residencial | Bege | `#d4a574` |
-| Comercial | Cinza | `#b0b0b0` |
-| Industrial | Marrom | `#8b7d6b` |
-| Apartamentos | Bege Claro | `#c0a080` |
-| Igreja | Marrom Escuro | `#8b4513` |
-| Hospital | Vermelho | `#ff6b6b` |
-
-### Tipos de Ruas
-| Tipo | Cor | Hex | Largura |
-|------|-----|-----|---------|
-| Motorway | Vermelho | `#ff6b6b` | 8px |
-| Primary/Trunk | Ouro | `#ffd700` | 6px |
-| Secondary | Amarelo Claro | `#ffee99` | 5px |
-| Tertiary | Branco | `#ffffff` | 4px |
-| Residencial | Branco | `#ffffff` | 2.5px |
-| Serviço | Cinza Claro | `#e0e0e0` | 1.5px |
-
-### Amenidades
-| Tipo | Cor | Hex |
-|------|-----|-----|
-| Hospital | Vermelho | `#ff0000` |
-| Escola | Azul | `#0000ff` |
-| Restaurante | Laranja Escuro | `#ff8c00` |
-| Café | Laranja | `#ffa500` |
-| Parque | Verde | `#00ff00` |
-| Estacionamento | Amarelo | `#ffff00` |
-| Banco | Púrpura | `#800080` |
-| Farmácia | Verde Escuro | `#008000` |
-| Estação de Bus | Rosa | `#ff1493` |
-
-## 🔧 Configurações Personalizáveis
-
-### Em `App.js`
+Em `App.web.jsx`, modifique:
 ```javascript
-// Raio de busca do mapa (em km)
-const data = await fetchMapData(coords.latitude, coords.longitude, 0.8);
-
-// Distância mínima para atualizar mapa
-distanceInterval: 10, // metros
-
-// Altura da câmera inicial
-<Map3DScene mapData={mapData} zoom={80} />
+const mockLocation = {
+  latitude: -23.5505,  // Sua latitude
+  longitude: -46.6333, // Sua longitude
+};
 ```
 
-### Em `osmService.js`
+### Mudar Raio de Busca
+
+Em `services/osmService.js`, altere:
 ```javascript
-// Raio padrão de busca
-radiusKm = 0.5
-
-// Tipos de dados a buscar (modificar a query Overpass)
-query = `[out:json];(
-  way["building"](...);
-  way["highway"](...);
-  node["amenity"](...);
-);out geom;`;
+const data = await fetchMapData(latitude, longitude, 0.5); // raio em km
 ```
 
-## 🌐 API Utilizada
+### Ajustar Configurações do Mapa
 
-### OpenStreetMap + Overpass API
-- **URL**: `https://overpass-api.de/api/interpreter`
-- **Grátis**: Sim, sem necessidade de API key
-- **Limite**: ~100 requisições/min (recomendado aguardar entre requisições)
-- **Dados**: Prédios, ruas, amenidades com atributos completos
+Veja `config/mapConfig.js` para:
+- Altura dos prédios
+- Tamanhos de estradas
+- Configurações de câmera
+- Iluminação
 
-## 📱 Controles da Câmera
+## 🎯 Funcionalidades Avançadas
 
-### Mouse (Desktop/Web)
-- **Botão esquerdo + arrastar**: Rotaciona câmera
-- **Roda do mouse**: Zoom in/out
-- **Botão direito + arrastar**: Pan (move a câmera lateralmente)
-- **Auto-damping**: Movimento suave com inércia
+### Alinhamento Perpendicular de Prédios
 
-### Touch (Mobile)
-- **Um dedo + arrastar**: Rotaciona câmera
-- **Dois dedos + pinça**: Zoom in/out
-- **Dois dedos + arrastar**: Pan
+Os prédios se alinham automaticamente perpendiculares às ruas próximas, criando visualização realista:
 
-## 🎛️ Componentes Principais
-
-### `App.js`
-- Gerencia localização GPS
-- Carrega dados do mapa quando a posição muda
-- Controla estado de loading
-- Exibe informações em tempo real
-
-### `Map3DScene.js`
-- Renderiza cena 3D com Three.js
-- Componentes: `Building`, `Road`, `Amenity`
-- Gerencia iluminação
-- Implementa OrbitControls
-
-### `osmService.js`
-- Faz requisições à Overpass API
-- Converte dados OSM em geometrias 3D
-- Aplica cores e estilos baseados em tipos
-- Estima alturas dos prédios
-
-### `geoUtils.js`
-- Converte coordenadas lat/lon para metros
-- Calcula distâncias (Haversine)
-- Simplifica caminhos (Ramer-Douglas-Peucker)
-- Trabalha com bounding boxes
-
-## ⚠️ Limitações e Considerações
-
-1. **Performance**: Renderizar muitos prédios pode impactar performance em dispositivos antigos
-2. **Dados OSM**: Qualidade varia por região - algumas áreas podem ter dados incompletos
-3. **Altura dos Prédios**: Estimada a partir de atributos; nem todos os prédios possuem altura definida
-4. **Taxa de Requisições**: Aguarde entre atualizações para não sobrecarregar a API
-5. **Distância**: Configurada para buscar em raio de 0.8km (~400 prédios médios)
-
-## 🔌 Dependências Principais
-
-```json
-{
-  "@react-three/fiber": "^9.5.0",      // Renderer Three.js para React
-  "@react-three/drei": "^9.x.x",       // Utilitários (OrbitControls)
-  "expo": "~54.0.33",                  // Framework React Native
-  "expo-location": "^19.0.8",          // API de GPS
-  "react-native": "0.81.5",            // Framework base
-  "three": "^0.166.1"                  // Engine 3D
-}
+```javascript
+function calculatePerpendiculalOrientation(buildingPoints, roads)
+// Busca a rua mais próxima e orienta o prédio transversalmente
 ```
 
-## 📝 Licença
+### Cores Inteligentes
 
-Este projeto utiliza dados do OpenStreetMap (ODbL License) e é fornecido sob a mesma licença.
+- **Prédios Residenciais**: Bege
+- **Comerciais**: Cinza
+- **Industriais**: Marrom
+- **Apartamentos**: Bege claro
+- **Estradas Principais**: Ouro
+- **Estradas Secundárias**: Amarelo claro
+- **Vias Corriqueiras**: Branco
 
-## 🤝 Contribuições
+## 📊 Performance
 
-Sinta-se livre para:
-- Reportar bugs
-- Sugerir novas features
-- Melhorar a renderização
-- Otimizar performance
+- Renderização otimizada com Three.js WebGL
+- Simplificação de caminhos para melhor performance
+- Grid de 500x500 para referência visual
+- Névoa (fog) para evitar renderizar muitos objetos distantes
 
-## 🎓 Próximas Melhorias Sugeridas
+## 🌐 Compatibilidade
 
-- [ ] Renderizar via Mapbox/Google Maps para melhor geometria
-- [ ] Adicionar texturas aos prédios
-- [ ] Implementar pathfinding para navegação
-- [ ] Cache de dados carregados
-- [ ] Modo noturno com iluminação dinâmica
-- [ ] Adicionar modelos 3D de pontos de interesse
-- [ ] Integração com Street View
-- [ ] Modo AR (Augmented Reality)
+- ✅ Chrome/Chromium 90+
+- ✅ Firefox 88+
+- ✅ Safari 15+
+- ✅ Edge 90+
+- ✅ Mobile browsers modernos
+
+Requer suporte a **WebGL** (praticamente todos os navegadores modernos têm)
+
+## 🐛 Troubleshooting
+
+### "Port 3000 is in use"
+Vite usará automaticamente a próxima porta disponível, ou mude em `vite.config.js`:
+```javascript
+server: { port: 3001 }
+```
+
+### Mapa não carrega
+1. Verifique console do navegador (F12)
+2. Overpass API pode estar sobrecarregada - tente novamente
+3. Verifique conexão com internet
+
+### Baixa performance
+- Reduza raio de busca em `osmService.js`
+- Verifique se GPU está sendo usada (DevTools > Performance)
+- Feche outras abas/aplicações
+
+## 📈 Expansões Futuras
+
+- [ ] Geolocation API para GPS real do navegador
+- [ ] Tracking em tempo real baseado em localização
+- [ ] Modo noturno
+- [ ] Exportação 3D (glTF, OBJ)
+- [ ] Análise de distâncias
+- [ ] Camadas customizáveis
+- [ ] Autenticação e salvamento de favoritos
+- [ ] PWA (Progressive Web App)
+
+## 📄 Documentação
+
+- [CONVERSAO_PARA_WEB.md](CONVERSAO_PARA_WEB.md) - Detalhes técnicos da conversão
+- [CHECKLIST_CONVERSAO_WEB.md](CHECKLIST_CONVERSAO_WEB.md) - Checklist de mudanças
+
+## 📝 Notas
+
+- Localização é mockada com coordenadas de São Paulo para compatibilidade
+- Para usar GPS real, implemente [Geolocation API](https://developer.mozilla.org/docs/Web/API/Geolocation_API)
+- CORS é permitido pela Overpass API (sem necessidade de proxy)
+
+## 🔐 Privacidade
+
+- Nenhum dado de localização é enviado para servidores
+- Tudo é processado localmente no navegador
+- Dados obtidos apenas de OpenStreetMap (público)
+
+## 📄 Licença
+
+Projeto sob licença apropriada. Dados do OpenStreetMap sob [ODbL](https://opendatacommons.org/licenses/odbl/)
+
+---
+
+**Desenvolvido com ❤️ usando React + Three.js**
+
+> Para sugestões e melhorias, abra uma issue ou pull request!
