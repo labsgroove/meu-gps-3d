@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, useMemo, memo } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
@@ -6,13 +6,22 @@ import * as THREE from 'three';
 // Se o mapa estiver espelhado no seu input, ative esse flag para inverter X
 const MIRROR_X = true;
 
+// Cache para orientações de prédios já calculadas
+const orientationCache = new Map();
+
 function mapToSceneCoord(p) {
   if (!p) return [0, 0];
   return [MIRROR_X ? -p[0] : p[0], p[1]];
 }
 
-// Função para calcular a orientação perpendicular às ruas próximas
+// Função para calcular a orientação perpendicular às ruas próximas (com cache)
 function calculatePerpendiculalOrientation(buildingPoints, roads) {
+  const cacheKey = `${buildingPoints.map(p => p.join(',')).join(';')}`;
+  
+  if (orientationCache.has(cacheKey)) {
+    return orientationCache.get(cacheKey);
+  }
+
   if (!roads || roads.length === 0) return 0;
 
   // Calcular centroide do prédio (aplicando transformação de coordenadas)
@@ -52,11 +61,12 @@ function calculatePerpendiculalOrientation(buildingPoints, roads) {
     }
   });
 
+  orientationCache.set(cacheKey, closestRoadAngle);
   return closestRoadAngle;
 }
 
-// Componente para renderizar edifícios com orientação corrigida
-function Building({ building, roads }) {
+// Componente para renderizar edifícios com orientação corrigida (memoizado)
+const Building = memo(function Building({ building, roads }) {
   if (!building || !building.points || building.points.length < 3) {
     return null;
   }
@@ -85,7 +95,7 @@ function Building({ building, roads }) {
       bevelEnabled: false,
     });
 
-    // Fazer a extrusão apontar para o eixo Y
+    // Fazer a extrusão apentar para o eixo Y
     geometry.rotateX(-Math.PI / 2);
     geometry.translate(0, depth / 2, 0);
 
@@ -94,17 +104,22 @@ function Building({ building, roads }) {
     // Posicionar o mesh no centroide e rotacionar em Y para alinhar com a rua
     return (
       <mesh geometry={geometry} position={[centerX, 0, centerY]} rotation={[0, rotation, 0]}>
-        <meshStandardMaterial color={color} metalness={0.2} roughness={0.7} />
+        <meshStandardMaterial 
+          color={color} 
+          metalness={0.2} 
+          roughness={0.7}
+          shadowMap={false}
+        />
       </mesh>
     );
   } catch (e) {
     console.warn('Building render error:', e.message);
     return null;
   }
-}
+});
 
-// Componente para renderizar estradas
-function Road({ road }) {
+// Componente para renderizar estradas (memoizado)
+const Road = memo(function Road({ road }) {
   if (!road || !road.points || road.points.length < 2) {
     return null;
   }
@@ -183,17 +198,22 @@ function Road({ road }) {
 
     return (
       <mesh geometry={geometry} position={[0, 0, 0]}>
-        <meshStandardMaterial color={road.color || 0x333333} roughness={0.9} side={THREE.DoubleSide} />
+        <meshStandardMaterial 
+          color={road.color || 0x333333} 
+          roughness={0.9} 
+          side={THREE.DoubleSide}
+          shadowMap={false}
+        />
       </mesh>
     );
   } catch (e) {
     console.warn('Road render error:', e.message);
     return null;
   }
-}
+});
 
-// Componente para renderizar amenidades
-function Amenity({ amenity }) {
+// Componente para renderizar amenidades (memoizado)
+const Amenity = memo(function Amenity({ amenity }) {
   if (!amenity || !amenity.position) {
     return null;
   }
@@ -203,14 +223,17 @@ function Amenity({ amenity }) {
     return (
       <mesh position={[pos[0], amenity.position[2] || 1, pos[1]]}>
         <cylinderGeometry args={[0.8, 0.8, 2, 8]} />
-        <meshStandardMaterial color={amenity.color || 0x00ffff} />
+        <meshStandardMaterial 
+          color={amenity.color || 0x00ffff}
+          shadowMap={false}
+        />
       </mesh>
     );
   } catch (e) {
     console.warn('Amenity render error:', e.message);
     return null;
   }
-}
+});
 
 // Componente principal da cena
 function SceneContent({ mapData }) {
@@ -239,9 +262,7 @@ function SceneContent({ mapData }) {
   if (!hasData) {
     return (
       <>
-        <ambientLight intensity={0.7} />
-        <directionalLight position={[100, 100, 100]} intensity={1} />
-        <hemisphereLight intensity={0.4} />
+        <ambientLight intensity={1} />
         <gridHelper args={[500, 50]} position={[0, -0.1, 0]} />
         <fog attach="fog" args={[0x87ceeb, 100, 2000]} />
       </>
@@ -250,14 +271,12 @@ function SceneContent({ mapData }) {
 
   return (
     <>
-      <ambientLight intensity={0.7} />
-      <directionalLight position={[100, 100, 100]} intensity={1} />
-      <hemisphereLight intensity={0.4} />
+      <ambientLight intensity={1} />
 
       {/* Solo (ground) */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]}> 
         <planeGeometry args={[2000, 2000]} />
-        <meshStandardMaterial color={0x8fbf6f} roughness={1} />
+        <meshBasicMaterial color={0x8fbf6f} />
       </mesh>
 
       <OrbitControls
@@ -297,9 +316,12 @@ export default function Map3DSceneWeb({ mapData, zoom = 50 }) {
         far: 10000,
       }}
       gl={{
-        antialias: true,
+        antialias: false,
         alpha: true,
+        powerPreference: 'high-performance',
+        pixelRatio: Math.min(window.devicePixelRatio, 2),
       }}
+      dpr={[1, Math.min(window.devicePixelRatio, 2)]}
       style={{ width: '100%', height: '100%' }}
     >
       <SceneContent mapData={mapData} />
