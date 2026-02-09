@@ -35,8 +35,9 @@ function calculatePerpendiculalOrientation(buildingPoints, roads) {
 
       if (distance < closestDistance) {
         closestDistance = distance;
-        // Orientação perpendicular (90 graus) à rua
-        closestRoadAngle = roadAngle + Math.PI / 2;
+        // Orientação perpendicular à rua. Usamos -PI/2 para ajustar a direção
+        // (corrige inversão percebida na renderização).
+        closestRoadAngle = roadAngle - Math.PI / 2;
       }
     }
   });
@@ -49,7 +50,6 @@ function Building({ building, roads }) {
   if (!building || !building.points || building.points.length < 3) {
     return null;
   }
-
   try {
     // Calcular centroide original
     const centerX = building.points.reduce((sum, p) => sum + p[0], 0) / building.points.length;
@@ -58,32 +58,30 @@ function Building({ building, roads }) {
     // Calcular orientação perpendicular às ruas
     const rotation = calculatePerpendiculalOrientation(building.points, roads);
 
-    // Rotacionar pontos ao redor do centroide
-    const rotatedPoints = building.points.map((p) => {
-      const dx = p[0] - centerX;
-      const dy = p[1] - centerY;
-      const newDx = dx * Math.cos(rotation) - dy * Math.sin(rotation);
-      const newDy = dx * Math.sin(rotation) + dy * Math.cos(rotation);
-      return [centerX + newDx, centerY + newDy];
-    });
+    // Criar shape em coordenadas locais (centralizadas no centroide)
+    const localPoints = building.points.map((p) => [p[0] - centerX, p[1] - centerY]);
 
     const shape = new THREE.Shape();
-    shape.moveTo(rotatedPoints[0][0], rotatedPoints[0][1]);
-    for (let i = 1; i < rotatedPoints.length; i++) {
-      shape.lineTo(rotatedPoints[i][0], rotatedPoints[i][1]);
+    shape.moveTo(localPoints[0][0], localPoints[0][1]);
+    for (let i = 1; i < localPoints.length; i++) {
+      shape.lineTo(localPoints[i][0], localPoints[i][1]);
     }
 
+    const depth = building.height || 10;
     const geometry = new THREE.ExtrudeGeometry(shape, {
-      depth: building.height || 10,
+      depth,
       bevelEnabled: false,
     });
 
-    geometry.translate(0, (building.height || 10) / 2, 0);
+    // Fazer a extrusão apontar para o eixo Y
+    geometry.rotateX(-Math.PI / 2);
+    geometry.translate(0, depth / 2, 0);
 
     const color = building.color || 0xa9a9a9;
 
+    // Posicionar o mesh no centroide e rotacionar em Y para alinhar com a rua
     return (
-      <mesh geometry={geometry} position={[0, 0, 0]}>
+      <mesh geometry={geometry} position={[centerX, 0, centerY]} rotation={[0, rotation, 0]}>
         <meshStandardMaterial color={color} metalness={0.2} roughness={0.7} />
       </mesh>
     );
@@ -100,14 +98,80 @@ function Road({ road }) {
   }
 
   try {
-    const points = road.points.map((p) => new THREE.Vector3(p[0], 0.1, p[1]));
+    // Construir uma faixa plana (ribbon) como BufferGeometry para evitar paredes verticais
+    const pts = road.points;
+    const width = road.width || 6;
+    const half = width / 2;
 
-    const curve = new THREE.CatmullRomCurve3(points);
-    const geometry = new THREE.TubeGeometry(curve, 12, Math.max(0.5, road.width / 4), 4);
+    const positions = [];
+    const normals = [];
+    const uvs = [];
+    const indices = [];
+
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      const x = p[0];
+      const z = p[1];
+
+      // Calcular tangente aproximada
+      let dx = 0;
+      let dz = 0;
+      if (i < pts.length - 1) {
+        dx = pts[i + 1][0] - x;
+        dz = pts[i + 1][1] - z;
+      } else {
+        dx = x - pts[i - 1][0];
+        dz = z - pts[i - 1][1];
+      }
+
+      const len = Math.sqrt(dx * dx + dz * dz) || 1;
+      dx /= len;
+      dz /= len;
+
+      // Perpendicular (no plano XZ)
+      const px = -dz;
+      const pz = dx;
+
+      const lx = x + px * half;
+      const lz = z + pz * half;
+      const rx = x - px * half;
+      const rz = z - pz * half;
+
+      // Y levemente acima do solo
+      const y = 0.01;
+
+      positions.push(lx, y, lz);
+      positions.push(rx, y, rz);
+
+      normals.push(0, 1, 0);
+      normals.push(0, 1, 0);
+
+      const t = pts.length > 1 ? i / (pts.length - 1) : 0;
+      uvs.push(t, 0);
+      uvs.push(t, 1);
+    }
+
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = 2 * i;
+      const b = 2 * i + 1;
+      const c = 2 * (i + 1);
+      const d = 2 * (i + 1) + 1;
+
+      indices.push(a, c, b);
+      indices.push(c, d, b);
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geometry.setIndex(indices);
+
+    geometry.computeBoundingSphere();
 
     return (
       <mesh geometry={geometry} position={[0, 0, 0]}>
-        <meshStandardMaterial color={road.color || 0xffffff} roughness={0.9} />
+        <meshStandardMaterial color={road.color || 0x333333} roughness={0.9} side={THREE.DoubleSide} />
       </mesh>
     );
   } catch (e) {
@@ -176,6 +240,12 @@ function SceneContent({ mapData }) {
       <ambientLight intensity={0.7} />
       <directionalLight position={[100, 100, 100]} intensity={1} />
       <hemisphereLight intensity={0.4} />
+
+      {/* Solo (ground) */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]}> 
+        <planeGeometry args={[2000, 2000]} />
+        <meshStandardMaterial color={0x8fbf6f} roughness={1} />
+      </mesh>
 
       <OrbitControls
         ref={controlsRef}
