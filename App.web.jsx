@@ -48,7 +48,7 @@ export default function AppWeb() {
       {mapData && location && !loading ? (
         <>
           <div className="map-container">
-            <Map3DSceneWeb mapData={mapData} zoom={60} />
+            <Map3DSceneWeb mapData={mapData} zoom={60} location={location} />
           </div>
           <div className="status-bar">
             <div className="status-text">

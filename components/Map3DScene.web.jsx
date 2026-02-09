@@ -1,4 +1,4 @@
-import React, { useRef, useMemo, memo } from 'react';
+import React, { useRef, useState, useMemo, memo, useEffect } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
@@ -235,9 +235,65 @@ const Amenity = memo(function Amenity({ amenity }) {
   }
 });
 
+// Componente para renderizar o ponto de localização (esfera)
+const LocationMarker = memo(function LocationMarker({ position }) {
+  if (!position) {
+    return null;
+  }
+
+  const meshRef = useRef();
+
+  useFrame(() => {
+    if (meshRef.current) {
+      meshRef.current.rotation.x += 0.01;
+      meshRef.current.rotation.y += 0.01;
+    }
+  });
+
+  return (
+    <mesh ref={meshRef} position={position}>
+      <sphereGeometry args={[2, 32, 32]} />
+      <meshStandardMaterial 
+        color={0xff0000}
+        metalness={0.5}
+        roughness={0.3}
+        emissive={0x660000}
+      />
+    </mesh>
+  );
+});
+
 // Componente principal da cena
-function SceneContent({ mapData }) {
+function SceneContent({ mapData, location, moveRef }) {
   const controlsRef = useRef();
+  const [pointPosition, setPointPosition] = useState([0, 1, 0]);
+  const keysPressed = useRef({});
+
+  // Inicializar posição com a localização fornecida
+  useMemo(() => {
+    if (location) {
+      const pos = mapToSceneCoord([location.longitude, location.latitude]);
+      setPointPosition([pos[0], 1, pos[1]]);
+    }
+  }, [location]);
+
+  // Controlar movimento com WASD
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      keysPressed.current[e.key.toLowerCase()] = true;
+    };
+    const handleKeyUp = (e) => {
+      keysPressed.current[e.key.toLowerCase()] = false;
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, []);
 
   useFrame(() => {
     if (controlsRef.current) {
@@ -247,6 +303,36 @@ function SceneContent({ mapData }) {
         // Ignore control update errors
       }
     }
+
+    // Atualizar posição do ponto baseado em WASD ou controles mobile
+    const moveSpeed = 0.5;
+    const keys = keysPressed.current;
+    const mobile = moveRef?.current || {};
+
+    let moved = false;
+    setPointPosition((prev) => {
+      let newPos = [...prev];
+
+      // Controles de teclado (WASD)
+      if (keys['w'] || mobile.up) {
+        newPos[2] -= moveSpeed; // Z negativo
+        moved = true;
+      }
+      if (keys['s'] || mobile.down) {
+        newPos[2] += moveSpeed; // Z positivo
+        moved = true;
+      }
+      if (keys['a'] || mobile.left) {
+        newPos[0] -= moveSpeed; // X negativo
+        moved = true;
+      }
+      if (keys['d'] || mobile.right) {
+        newPos[0] += moveSpeed; // X positivo
+        moved = true;
+      }
+
+      return moved ? newPos : prev;
+    });
   });
 
   if (!mapData) {
@@ -300,31 +386,153 @@ function SceneContent({ mapData }) {
         <Amenity key={`a-${amenity.id}`} amenity={amenity} />
       ))}
 
+      <LocationMarker position={pointPosition} />
+
       <gridHelper args={[500, 50]} position={[0, -0.1, 0]} />
       <fog attach="fog" args={[0x87ceeb, 100, 2000]} />
     </>
   );
 }
 
-export default function Map3DSceneWeb({ mapData, zoom = 50 }) {
+export default function Map3DSceneWeb({ mapData, zoom = 50, location }) {
+  const [mobileControls, setMobileControls] = useState(false);
+  const moveRef = useRef({ up: false, down: false, left: false, right: false });
+
+  // Detectar se é mobile
+  useEffect(() => {
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+      navigator.userAgent
+    );
+    setMobileControls(isMobile);
+  }, []);
+
+  const handleMoveStart = (direction) => {
+    moveRef.current[direction] = true;
+  };
+
+  const handleMoveEnd = (direction) => {
+    moveRef.current[direction] = false;
+  };
+
   return (
-    <Canvas
-      camera={{
-        position: [0, zoom, zoom],
-        fov: 45,
-        near: 0.1,
-        far: 10000,
-      }}
-      gl={{
-        antialias: false,
-        alpha: true,
-        powerPreference: 'high-performance',
-        pixelRatio: Math.min(window.devicePixelRatio, 2),
-      }}
-      dpr={[1, Math.min(window.devicePixelRatio, 2)]}
-      style={{ width: '100%', height: '100%' }}
-    >
-      <SceneContent mapData={mapData} />
-    </Canvas>
+    <div style={{ width: '100%', height: '100%', position: 'relative' }}>
+      <Canvas
+        camera={{
+          position: [0, zoom, zoom],
+          fov: 45,
+          near: 0.1,
+          far: 10000,
+        }}
+        gl={{
+          antialias: false,
+          alpha: true,
+          powerPreference: 'high-performance',
+          pixelRatio: Math.min(window.devicePixelRatio, 2),
+        }}
+        dpr={[1, Math.min(window.devicePixelRatio, 2)]}
+        style={{ width: '100%', height: '100%' }}
+      >
+        <SceneContent mapData={mapData} location={location} moveRef={moveRef} />
+      </Canvas>
+
+      {mobileControls && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: '20px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            display: 'grid',
+            gridTemplateColumns: 'repeat(3, 50px)',
+            gap: '5px',
+            zIndex: 100,
+          }}
+        >
+          <div style={{ gridColumn: '2' }}>
+            <button
+              onMouseDown={() => handleMoveStart('up')}
+              onMouseUp={() => handleMoveEnd('up')}
+              onTouchStart={() => handleMoveStart('up')}
+              onTouchEnd={() => handleMoveEnd('up')}
+              style={{
+                width: '50px',
+                height: '50px',
+                fontSize: '24px',
+                borderRadius: '50%',
+                border: '2px solid #333',
+                backgroundColor: '#fff',
+                cursor: 'pointer',
+                fontWeight: 'bold',
+              }}
+            >
+              ↑
+            </button>
+          </div>
+
+          <div style={{ gridColumn: '1' }}>
+            <button
+              onMouseDown={() => handleMoveStart('left')}
+              onMouseUp={() => handleMoveEnd('left')}
+              onTouchStart={() => handleMoveStart('left')}
+              onTouchEnd={() => handleMoveEnd('left')}
+              style={{
+                width: '50px',
+                height: '50px',
+                fontSize: '24px',
+                borderRadius: '50%',
+                border: '2px solid #333',
+                backgroundColor: '#fff',
+                cursor: 'pointer',
+                fontWeight: 'bold',
+              }}
+            >
+              ←
+            </button>
+          </div>
+
+          <div style={{ gridColumn: '2' }}>
+            <button
+              onMouseDown={() => handleMoveStart('down')}
+              onMouseUp={() => handleMoveEnd('down')}
+              onTouchStart={() => handleMoveStart('down')}
+              onTouchEnd={() => handleMoveEnd('down')}
+              style={{
+                width: '50px',
+                height: '50px',
+                fontSize: '24px',
+                borderRadius: '50%',
+                border: '2px solid #333',
+                backgroundColor: '#fff',
+                cursor: 'pointer',
+                fontWeight: 'bold',
+              }}
+            >
+              ↓
+            </button>
+          </div>
+
+          <div style={{ gridColumn: '3' }}>
+            <button
+              onMouseDown={() => handleMoveStart('right')}
+              onMouseUp={() => handleMoveEnd('right')}
+              onTouchStart={() => handleMoveStart('right')}
+              onTouchEnd={() => handleMoveEnd('right')}
+              style={{
+                width: '50px',
+                height: '50px',
+                fontSize: '24px',
+                borderRadius: '50%',
+                border: '2px solid #333',
+                backgroundColor: '#fff',
+                cursor: 'pointer',
+                fontWeight: 'bold',
+              }}
+            >
+              →
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
