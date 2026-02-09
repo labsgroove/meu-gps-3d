@@ -1,7 +1,7 @@
-// index.web.js
+// index.web.jsx
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import AppWeb from './AppWeb';
+import AppWeb from './App.web.jsx';
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(

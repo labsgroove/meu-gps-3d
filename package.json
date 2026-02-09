@@ -1,27 +1,23 @@
 {
   "name": "meu-gps-3d",
   "version": "1.0.0",
-  "main": "index.js",
+  "type": "module",
   "scripts": {
-    "start": "expo start",
-    "android": "expo run:android",
-    "ios": "expo run:ios",
-    "web": "expo start --web"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.5.0",
     "@turf/turf": "^7.3.4",
-    "expo": "~54.0.33",
-    "expo-location": "^19.0.8",
-    "expo-status-bar": "~3.0.9",
-    "expo-three": "^2.2.1",
-    "react": "19.1.0",
+    "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "react-native": "0.81.5",
-    "react-native-maps": "1.20.1",
-    "react-native-web": "^0.21.0",
     "three": "^0.166.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.1",
+    "vite": "^5.0.8"
   },
   "private": true
 }
