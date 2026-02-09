@@ -3,13 +3,22 @@ import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 
+// Se o mapa estiver espelhado no seu input, ative esse flag para inverter X
+const MIRROR_X = true;
+
+function mapToSceneCoord(p) {
+  if (!p) return [0, 0];
+  return [MIRROR_X ? -p[0] : p[0], p[1]];
+}
+
 // Função para calcular a orientação perpendicular às ruas próximas
 function calculatePerpendiculalOrientation(buildingPoints, roads) {
   if (!roads || roads.length === 0) return 0;
 
-  // Calcular centroide do prédio
-  const centerX = buildingPoints.reduce((sum, p) => sum + p[0], 0) / buildingPoints.length;
-  const centerY = buildingPoints.reduce((sum, p) => sum + p[1], 0) / buildingPoints.length;
+  // Calcular centroide do prédio (aplicando transformação de coordenadas)
+  const mapped = buildingPoints.map((p) => mapToSceneCoord(p));
+  const centerX = mapped.reduce((sum, p) => sum + p[0], 0) / mapped.length;
+  const centerY = mapped.reduce((sum, p) => sum + p[1], 0) / mapped.length;
 
   let closestRoadAngle = 0;
   let closestDistance = Infinity;
@@ -23,20 +32,21 @@ function calculatePerpendiculalOrientation(buildingPoints, roads) {
       const p1 = road.points[i];
       const p2 = road.points[i + 1];
 
-      // Calcular direção da estrada
-      const roadDx = p2[0] - p1[0];
-      const roadDy = p2[1] - p1[1];
-      const roadAngle = Math.atan2(roadDy, roadDx);
+      // Calcular direção da estrada (aplica transformação de coordenadas)
+      const mp1 = mapToSceneCoord(p1);
+      const mp2 = mapToSceneCoord(p2);
+      const roadDx = mp2[0] - mp1[0];
+      const roadDy = mp2[1] - mp1[1];
+      let roadAngle = Math.atan2(roadDy, roadDx);
 
-      // Calcular distância do prédio ao ponto médio da rua
-      const midX = (p1[0] + p2[0]) / 2;
-      const midY = (p1[1] + p2[1]) / 2;
+      // Calcular distância do prédio ao ponto médio da rua (em coords de cena)
+      const midX = (mp1[0] + mp2[0]) / 2;
+      const midY = (mp1[1] + mp2[1]) / 2;
       const distance = Math.sqrt((centerX - midX) ** 2 + (centerY - midY) ** 2);
 
       if (distance < closestDistance) {
         closestDistance = distance;
-        // Orientação perpendicular à rua. Usamos -PI/2 para ajustar a direção
-        // (corrige inversão percebida na renderização).
+        // Orientação perpendicular à rua.
         closestRoadAngle = roadAngle - Math.PI / 2;
       }
     }
@@ -51,15 +61,17 @@ function Building({ building, roads }) {
     return null;
   }
   try {
-    // Calcular centroide original
-    const centerX = building.points.reduce((sum, p) => sum + p[0], 0) / building.points.length;
-    const centerY = building.points.reduce((sum, p) => sum + p[1], 0) / building.points.length;
+    // Calcular centroide no sistema de cena (aplica mapToSceneCoord)
+    const mappedPoints = building.points.map((p) => mapToSceneCoord(p));
+    const centerX = mappedPoints.reduce((sum, p) => sum + p[0], 0) / mappedPoints.length;
+    const centerY = mappedPoints.reduce((sum, p) => sum + p[1], 0) / mappedPoints.length;
 
-    // Calcular orientação perpendicular às ruas
-    const rotation = calculatePerpendiculalOrientation(building.points, roads);
+    // Calcular orientação perpendicular às ruas (calculatePerpendiculalOrientation aplica mapeamento internamente)
+    let rotation = calculatePerpendiculalOrientation(building.points, roads);
+    if (MIRROR_X) rotation = -rotation;
 
-    // Criar shape em coordenadas locais (centralizadas no centroide)
-    const localPoints = building.points.map((p) => [p[0] - centerX, p[1] - centerY]);
+    // Criar shape em coordenadas locais (centralizadas no centroide, em sistema de cena)
+    const localPoints = mappedPoints.map((p) => [p[0] - centerX, p[1] - centerY]);
 
     const shape = new THREE.Shape();
     shape.moveTo(localPoints[0][0], localPoints[0][1]);
@@ -99,7 +111,7 @@ function Road({ road }) {
 
   try {
     // Construir uma faixa plana (ribbon) como BufferGeometry para evitar paredes verticais
-    const pts = road.points;
+    const pts = road.points.map((p) => mapToSceneCoord(p));
     const width = road.width || 6;
     const half = width / 2;
 
@@ -187,8 +199,9 @@ function Amenity({ amenity }) {
   }
 
   try {
+    const pos = mapToSceneCoord(amenity.position);
     return (
-      <mesh position={amenity.position}>
+      <mesh position={[pos[0], amenity.position[2] || 1, pos[1]]}>
         <cylinderGeometry args={[0.8, 0.8, 2, 8]} />
         <meshStandardMaterial color={amenity.color || 0x00ffff} />
       </mesh>

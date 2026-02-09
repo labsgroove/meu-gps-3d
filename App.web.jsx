@@ -16,8 +16,8 @@ export default function AppWeb() {
         // Mock de localização para web
         // São Paulo, Brasil
         const mockLocation = {
-          latitude: -23.5505,
-          longitude: -46.6333,
+          latitude: -25.5022141,
+          longitude: -49.1837419,
           altitude: 0,
           accuracy: 10,
         };
