@@ -9,6 +9,8 @@ export default function AppWeb() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [mapError, setMapError] = useState(false);
+  const [coordInput, setCoordInput] = useState('');
+  const [inputError, setInputError] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -43,11 +45,56 @@ export default function AppWeb() {
     })();
   }, []);
 
+  const handleGoToCoordinates = async () => {
+    setInputError(null);
+    if (!coordInput) return;
+    // aceitar formatos: "lat,lon" ou "lon,lat" — assumimos "lat,lon"
+    const parts = coordInput.split(',').map(p => p.trim()).filter(Boolean);
+    if (parts.length !== 2) {
+      setInputError('Informe em: latitude, longitude');
+      return;
+    }
+
+    const lat = parseFloat(parts[0].replace(/\s+/g, ''));
+    const lon = parseFloat(parts[1].replace(/\s+/g, ''));
+
+    if (Number.isNaN(lat) || Number.isNaN(lon)) {
+      setInputError('Coordenadas inválidas');
+      return;
+    }
+
+    const newLoc = { latitude: lat, longitude: lon, altitude: 0, accuracy: 5 };
+    try {
+      setLoading(true);
+      setLocation(newLoc);
+      const data = await fetchMapData(lat, lon, 0.5);
+      setMapData(data);
+      setMapError(false);
+    } catch (err) {
+      console.error('Erro ao carregar mapa para coordenadas:', err);
+      setMapError(true);
+      setInputError('Falha ao carregar mapa');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="app-container">
       {mapData && location && !loading ? (
         <>
           <div className="map-container">
+            <div className="coord-input">
+              <input
+                aria-label="Coordenadas"
+                placeholder="latitude, longitude"
+                value={coordInput}
+                onChange={(e) => setCoordInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleGoToCoordinates(); }}
+              />
+              <button onClick={handleGoToCoordinates}>Ir</button>
+              {inputError && <div className="coord-error">{inputError}</div>}
+            </div>
             <Map3DSceneWeb mapData={mapData} zoom={60} location={location} />
           </div>
           <div className="status-bar">
