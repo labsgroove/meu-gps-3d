@@ -27,8 +27,8 @@ export const MAP_CONFIG = {
   // Multiplicador de altura para visualização melhorada
   HEIGHT_MULTIPLIER: 1.2,
 
-  // Largura das estradas em metros (será dividida por zoom)
-  ROAD_WIDTH_MULTIPLIER: 1,
+  // Largura das estradas em metros (multiplicador global para deixar vias mais largas)
+  ROAD_WIDTH_MULTIPLIER: 1.6,
 
   // Configurações de iluminação
   LIGHTING: {

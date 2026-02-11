@@ -2,6 +2,7 @@ import React, { useRef, useState, useMemo, memo, useEffect } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
+import { MAP_CONFIG, MATERIALS } from '../config/mapConfig';
 
 // Se o mapa estiver espelhado no seu input, ative esse flag para inverter X
 const MIRROR_X = true;
@@ -125,86 +126,124 @@ const Road = memo(function Road({ road }) {
   }
 
   try {
-    // Construir uma faixa plana (ribbon) como BufferGeometry para evitar paredes verticais
+    // Converter pontos para coordenadas da cena
     const pts = road.points.map((p) => mapToSceneCoord(p));
-    const width = road.width || 6;
+
+    // Largura base (em metros) aplicada com multiplicador global
+    const baseWidth = (road.width || 6) * (MAP_CONFIG.ROAD_WIDTH_MULTIPLIER || 1);
+    const width = Math.max(0.5, baseWidth);
     const half = width / 2;
 
-    const positions = [];
-    const normals = [];
-    const uvs = [];
-    const indices = [];
+    // Elevação mais pronunciada para evitar z-fighting (levantar acima do solo)
+    const mainY = 0.2;
+    // Contorno ligeiramente abaixo da via principal, mas ainda acima do solo
+    const outlineY = mainY - 0.01;
 
-    for (let i = 0; i < pts.length; i++) {
-      const p = pts[i];
-      const x = p[0];
-      const z = p[1];
+    // Função para construir ribbon geometry a partir de half-width e y
+    const buildRibbon = (halfWidth, y) => {
+      const positions = [];
+      const normals = [];
+      const uvs = [];
+      const indices = [];
 
-      // Calcular tangente aproximada
-      let dx = 0;
-      let dz = 0;
-      if (i < pts.length - 1) {
-        dx = pts[i + 1][0] - x;
-        dz = pts[i + 1][1] - z;
-      } else {
-        dx = x - pts[i - 1][0];
-        dz = z - pts[i - 1][1];
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i];
+        const x = p[0];
+        const z = p[1];
+
+        // Tangente aproximada
+        let dx = 0;
+        let dz = 0;
+        if (i < pts.length - 1) {
+          dx = pts[i + 1][0] - x;
+          dz = pts[i + 1][1] - z;
+        } else {
+          dx = x - pts[i - 1][0];
+          dz = z - pts[i - 1][1];
+        }
+
+        const len = Math.sqrt(dx * dx + dz * dz) || 1;
+        dx /= len;
+        dz /= len;
+
+        // Perpendicular no plano XZ
+        const px = -dz;
+        const pz = dx;
+
+        const lx = x + px * halfWidth;
+        const lz = z + pz * halfWidth;
+        const rx = x - px * halfWidth;
+        const rz = z - pz * halfWidth;
+
+        positions.push(lx, y, lz);
+        positions.push(rx, y, rz);
+
+        normals.push(0, 1, 0);
+        normals.push(0, 1, 0);
+
+        const t = pts.length > 1 ? i / (pts.length - 1) : 0;
+        uvs.push(t, 0);
+        uvs.push(t, 1);
       }
 
-      const len = Math.sqrt(dx * dx + dz * dz) || 1;
-      dx /= len;
-      dz /= len;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const a = 2 * i;
+        const b = 2 * i + 1;
+        const c = 2 * (i + 1);
+        const d = 2 * (i + 1) + 1;
 
-      // Perpendicular (no plano XZ)
-      const px = -dz;
-      const pz = dx;
+        indices.push(a, c, b);
+        indices.push(c, d, b);
+      }
 
-      const lx = x + px * half;
-      const lz = z + pz * half;
-      const rx = x - px * half;
-      const rz = z - pz * half;
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+      geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      geometry.setIndex(indices);
+      geometry.computeBoundingSphere();
+      return geometry;
+    };
 
-      // Y levemente acima do solo
-      const y = 0.01;
+    // Construir geometria do contorno (um pouco mais larga)
+    const outlineGap = Math.max(0.4, width * 0.08);
+    const outlineGeom = buildRibbon(half + outlineGap, outlineY);
 
-      positions.push(lx, y, lz);
-      positions.push(rx, y, rz);
+    // Geometria principal da via
+    const mainGeom = buildRibbon(half, mainY);
 
-      normals.push(0, 1, 0);
-      normals.push(0, 1, 0);
-
-      const t = pts.length > 1 ? i / (pts.length - 1) : 0;
-      uvs.push(t, 0);
-      uvs.push(t, 1);
-    }
-
-    for (let i = 0; i < pts.length - 1; i++) {
-      const a = 2 * i;
-      const b = 2 * i + 1;
-      const c = 2 * (i + 1);
-      const d = 2 * (i + 1) + 1;
-
-      indices.push(a, c, b);
-      indices.push(c, d, b);
-    }
-
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
-    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-    geometry.setIndex(indices);
-
-    geometry.computeBoundingSphere();
+    // Cores
+    const roadColor = road.color || 0x333333;
+    // Contorno: escurece a cor principal para criar contraste
+    const outlineColor = 0x000000;
 
     return (
-      <mesh geometry={geometry} position={[0, 0, 0]}>
-        <meshStandardMaterial 
-          color={road.color || 0x333333} 
-          roughness={0.9} 
-          side={THREE.DoubleSide}
-          shadowMap={false}
-        />
-      </mesh>
+      <group position={[0, 0, 0]}>
+        <mesh geometry={outlineGeom} position={[0, 0, 0]}> 
+          <meshStandardMaterial
+            color={outlineColor}
+            side={THREE.DoubleSide}
+            polygonOffset={true}
+            polygonOffsetFactor={1}
+            polygonOffsetUnits={1}
+            roughness={1}
+            metalness={0}
+          />
+        </mesh>
+
+        <mesh geometry={mainGeom} position={[0, 0, 0]}> 
+          <meshStandardMaterial 
+            color={roadColor} 
+            roughness={MATERIALS.road?.roughness ?? 0.9} 
+            metalness={MATERIALS.road?.metalness ?? 0}
+            side={THREE.DoubleSide}
+            shadowMap={false}
+            polygonOffset={true}
+            polygonOffsetFactor={-1}
+            polygonOffsetUnits={-1}
+          />
+        </mesh>
+      </group>
     );
   } catch (e) {
     console.warn('Road render error:', e.message);
@@ -349,7 +388,6 @@ function SceneContent({ mapData, location, moveRef }) {
     return (
       <>
         <ambientLight intensity={1} />
-        <gridHelper args={[500, 50]} position={[0, -0.1, 0]} />
         <fog attach="fog" args={[0x87ceeb, 100, 2000]} />
       </>
     );
@@ -387,8 +425,6 @@ function SceneContent({ mapData, location, moveRef }) {
       ))}
 
       <LocationMarker position={pointPosition} />
-
-      <gridHelper args={[500, 50]} position={[0, -0.1, 0]} />
       <fog attach="fog" args={[0x87ceeb, 100, 2000]} />
     </>
   );
