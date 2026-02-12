@@ -422,21 +422,8 @@ function SceneContent({ mapData, location, moveRef, onLocationChange, zoom = 50 
         moved = true;
       }
 
-      // If moved, notify parent with map coords (lon/lat)
       if (moved) {
-        if (typeof onLocationChange === 'function') {
-          const [lon, lat] = sceneToMapCoord([newPos[0], newPos[2]]);
-          try {
-            onLocationChange({
-              latitude: lat,
-              longitude: lon,
-              altitude: newPos[1] || 0,
-              accuracy: location?.accuracy ?? 10,
-            });
-          } catch (e) {
-            // ignore callback errors
-          }
-        }
+        // movimento local apenas — não propagar mudança de coordenadas para o pai
         return newPos;
       }
       return prev;
