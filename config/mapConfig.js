@@ -3,7 +3,7 @@
 
 export const MAP_CONFIG = {
   // Raio de busca do mapa em km
-  SEARCH_RADIUS_KM: 2.8,
+  SEARCH_RADIUS_KM: 3,
 
   // Distância mínima em metros para atualizar o mapa
   UPDATE_DISTANCE_INTERVAL: 10,

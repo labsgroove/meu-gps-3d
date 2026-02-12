@@ -21,7 +21,7 @@ export default function AppWeb() {
           latitude: -25.4957255,
           longitude: -49.1658802,
           altitude: 0,
-          accuracy: 10,
+          accuracy: 5,
         };
 
         setLocation(mockLocation);

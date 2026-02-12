@@ -405,19 +405,19 @@ function SceneContent({ mapData, location, moveRef, onLocationChange, zoom = 50 
       let newPos = [...prev];
 
       // Controles de teclado (WASD)
-      if (keys['w'] || mobile.up) {
+      if (keys['s'] || mobile.up) {
         newPos[2] -= moveSpeed;
         moved = true;
       }
-      if (keys['s'] || mobile.down) {
+      if (keys['w'] || mobile.down) {
         newPos[2] += moveSpeed;
         moved = true;
       }
-      if (keys['a'] || mobile.left) {
+      if (keys['d'] || mobile.left) {
         newPos[0] -= moveSpeed;
         moved = true;
       }
-      if (keys['d'] || mobile.right) {
+      if (keys['a'] || mobile.right) {
         newPos[0] += moveSpeed;
         moved = true;
       }
@@ -431,7 +431,7 @@ function SceneContent({ mapData, location, moveRef, onLocationChange, zoom = 50 
               latitude: lat,
               longitude: lon,
               altitude: newPos[1] || 0,
-              accuracy: location?.accuracy ?? 5,
+              accuracy: location?.accuracy ?? 10,
             });
           } catch (e) {
             // ignore callback errors
