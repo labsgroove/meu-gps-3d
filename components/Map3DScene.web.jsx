@@ -342,16 +342,9 @@ const LocationMarker = memo(function LocationMarker({ position }) {
 function SceneContent({ mapData, location, moveRef, onLocationChange, zoom = 50 }) {
   const controlsRef = useRef();
   const { camera } = useThree();
-  const [pointPosition, setPointPosition] = useState([0, 1, 0]);
+  const [pointPosition] = useState([0, 1, 0]); // Sempre fixo no centro
+  const [worldOffset, setWorldOffset] = useState([0, 0]); // Offset do mundo que se move inversamente
   const keysPressed = useRef({});
-
-  // Inicializar posição com a localização fornecida
-  useMemo(() => {
-    if (location) {
-      const pos = mapToSceneCoord([location.longitude, location.latitude]);
-      setPointPosition([pos[0], 1, pos[1]]);
-    }
-  }, [location]);
 
   // Controlar movimento com WASD
   useEffect(() => {
@@ -372,8 +365,8 @@ function SceneContent({ mapData, location, moveRef, onLocationChange, zoom = 50 
   }, []);
 
   useFrame((state, delta) => {
-    // Mantém o ponto como target do OrbitControls com suavização — permite órbita/zoom centrados no ponto
-    if (pointPosition && controlsRef.current) {
+    // Mantém o ponto fixo no centro como target do OrbitControls
+    if (controlsRef.current) {
       const pos = pointPosition;
       const desiredTarget = new THREE.Vector3(pos[0], pos[1], pos[2]);
       // Suaviza o movimento do target para evitar saltos bruscos
@@ -389,42 +382,42 @@ function SceneContent({ mapData, location, moveRef, onLocationChange, zoom = 50 
         // Não sobrescrever camera.position durante a interação — o OrbitControls gerencia órbita/zoom
         controlsRef.current.update();
       }
-    } else if (pointPosition) {
-      // fallback se controls não estiver pronto
-      camera.lookAt(pointPosition[0], pointPosition[1], pointPosition[2]);
     }
 
-    // Atualizar posição do ponto baseado em WASD ou controles mobile
+    // Atualizar o offset do mundo baseado em WASD ou controles mobile (movimento invertido)
     const moveSpeed = 0.5;
     const keys = keysPressed.current;
     const mobile = moveRef?.current || {};
 
     let moved = false;
 
-    setPointPosition((prev) => {
-      let newPos = [...prev];
+    setWorldOffset((prev) => {
+      let newOffset = [...prev];
 
-      // Controles de teclado (WASD)
-      if (keys['s'] || mobile.up) {
-        newPos[2] -= moveSpeed;
+      // Controles de teclado (WASD) - INVERTIDOS para mover o mundo
+      // W deve mover o mundo para trás (offset negativo em Z)
+      // S deve mover o mundo para frente (offset positivo em Z)
+      if (keys['w'] || mobile.up) {
+        newOffset[1] -= moveSpeed; // Z negativo (mundo se move para trás)
         moved = true;
       }
-      if (keys['w'] || mobile.down) {
-        newPos[2] += moveSpeed;
+      if (keys['s'] || mobile.down) {
+        newOffset[1] += moveSpeed; // Z positivo (mundo se move para frente)
         moved = true;
       }
-      if (keys['d'] || mobile.left) {
-        newPos[0] -= moveSpeed;
+      // A deve mover o mundo para direita (offset positivo em X)
+      // D deve mover o mundo para esquerda (offset negativo em X)
+      if (keys['a'] || mobile.left) {
+        newOffset[0] += moveSpeed; // X positivo (mundo se move para direita)
         moved = true;
       }
-      if (keys['a'] || mobile.right) {
-        newPos[0] += moveSpeed;
+      if (keys['d'] || mobile.right) {
+        newOffset[0] -= moveSpeed; // X negativo (mundo se move para esquerda)
         moved = true;
       }
 
       if (moved) {
-        // movimento local apenas — não propagar mudança de coordenadas para o pai
-        return newPos;
+        return newOffset;
       }
       return prev;
     });
@@ -453,11 +446,26 @@ function SceneContent({ mapData, location, moveRef, onLocationChange, zoom = 50 
     <>
       <ambientLight intensity={1} />
 
-      {/* Solo (ground) */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]}> 
-        <planeGeometry args={[2000, 2000]} />
-        <meshBasicMaterial color={0x8fbf6f} />
-      </mesh>
+      {/* Grupo que contém todo o mapa - translada com worldOffset inverso */}
+      <group position={[-worldOffset[0], 0, -worldOffset[1]]}>
+        {/* Solo (ground) */}
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]}>
+          <planeGeometry args={[2000, 2000]} />
+          <meshBasicMaterial color={0x8fbf6f} />
+        </mesh>
+
+        {roads.map((road) => (
+          <Road key={`r-${road.id}`} road={road} />
+        ))}
+
+        {buildings.map((building) => (
+          <Building key={`b-${building.id}`} building={building} roads={roads} />
+        ))}
+
+        {amenities.map((amenity) => (
+          <Amenity key={`a-${amenity.id}`} amenity={amenity} />
+        ))}
+      </group>
 
       <OrbitControls
         ref={controlsRef}
@@ -472,18 +480,6 @@ function SceneContent({ mapData, location, moveRef, onLocationChange, zoom = 50 
         minPolarAngle={0.1}
         maxPolarAngle={Math.PI / 2}
       />
-
-      {roads.map((road) => (
-        <Road key={`r-${road.id}`} road={road} />
-      ))}
-
-      {buildings.map((building) => (
-        <Building key={`b-${building.id}`} building={building} roads={roads} />
-      ))}
-
-      {amenities.map((amenity) => (
-        <Amenity key={`a-${amenity.id}`} amenity={amenity} />
-      ))}
 
       <LocationMarker position={pointPosition} />
       <fog attach="fog" args={[0x87ceeb, 100, 2000]} />
