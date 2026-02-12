@@ -1,5 +1,6 @@
 // services/osmService.js
 // Serviço para buscar dados de OpenStreetMap via Overpass API
+import { simplifyPath } from '../utils/geoUtils.js';
 
 const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
 
@@ -87,7 +88,11 @@ function parseBuilding(way, centerLat, centerLon) {
 
 function parseRoad(way, centerLat, centerLon) {
   const coordinates = way.geometry || [];
-  const points = coordinates.map((coord) => latLonToCartesian(coord.lat, coord.lon, centerLat, centerLon));
+  const rawPoints = coordinates.map((coord) => latLonToCartesian(coord.lat, coord.lon, centerLat, centerLon));
+
+  // Simplificar caminho para reduzir vértices desnecessários (tolerância em metros)
+  const tolerance = 1.0; // 1 metro por padrão; ajustar conforme necessidade
+  const points = simplifyPath(rawPoints, tolerance);
 
   return {
     id: way.id,

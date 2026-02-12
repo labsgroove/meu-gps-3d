@@ -10,6 +10,9 @@ const MIRROR_X = true;
 // Cache para orientações de prédios já calculadas
 const orientationCache = new Map();
 
+// Cache de geometrias de ruas para evitar recomputos
+const roadGeomCache = new Map();
+
 function mapToSceneCoord(p) {
   if (!p) return [0, 0];
   return [MIRROR_X ? -p[0] : p[0], p[1]];
@@ -129,88 +132,114 @@ const Road = memo(function Road({ road }) {
     // Converter pontos para coordenadas da cena
     const pts = road.points.map((p) => mapToSceneCoord(p));
 
-    // Largura base (em metros) aplicada com multiplicador global
-    const baseWidth = (road.width || 6) * (MAP_CONFIG.ROAD_WIDTH_MULTIPLIER || 1);
-    const width = Math.max(0.5, baseWidth);
-    const half = width / 2;
+    // Cache key baseado no id e características
+    const cacheKey = `road-${road.id}-${pts.length}-${road.width || ''}`;
 
-    // Elevação mais pronunciada para evitar z-fighting (levantar acima do solo)
-    const mainY = 0.2;
-    // Contorno ligeiramente abaixo da via principal, mas ainda acima do solo
-    const outlineY = mainY - 0.01;
+    let cached = roadGeomCache.get(cacheKey);
+    if (!cached) {
+      // Largura base (em metros) aplicada com multiplicador global
+      const baseWidth = (road.width || 6) * (MAP_CONFIG.ROAD_WIDTH_MULTIPLIER || 1);
+      const width = Math.max(0.5, baseWidth);
+      const half = width / 2;
 
-    // Função para construir ribbon geometry a partir de half-width e y
-    const buildRibbon = (halfWidth, y) => {
-      const positions = [];
-      const normals = [];
-      const uvs = [];
-      const indices = [];
+      // Elevação mais pronunciada para evitar z-fighting (levantar acima do solo)
+      const mainY = 0.2;
+      // Contorno ligeiramente abaixo da via principal, mas ainda acima do solo
+      const outlineY = mainY - 0.01;
 
-      for (let i = 0; i < pts.length; i++) {
-        const p = pts[i];
-        const x = p[0];
-        const z = p[1];
+      // Função para construir ribbon geometry a partir de half-width e y
+      const buildRibbon = (halfWidth, y) => {
+        const positions = [];
+        const normals = [];
+        const uvs = [];
+        const indices = [];
 
-        // Tangente aproximada
-        let dx = 0;
-        let dz = 0;
-        if (i < pts.length - 1) {
-          dx = pts[i + 1][0] - x;
-          dz = pts[i + 1][1] - z;
-        } else {
-          dx = x - pts[i - 1][0];
-          dz = z - pts[i - 1][1];
+        for (let i = 0; i < pts.length; i++) {
+          const p = pts[i];
+          const x = p[0];
+          const z = p[1];
+
+          // Tangente aproximada
+          let dx = 0;
+          let dz = 0;
+          if (i < pts.length - 1) {
+            dx = pts[i + 1][0] - x;
+            dz = pts[i + 1][1] - z;
+          } else {
+            dx = x - pts[i - 1][0];
+            dz = z - pts[i - 1][1];
+          }
+
+          const len = Math.sqrt(dx * dx + dz * dz) || 1;
+          dx /= len;
+          dz /= len;
+
+          // Perpendicular no plano XZ
+          const px = -dz;
+          const pz = dx;
+
+          const lx = x + px * halfWidth;
+          const lz = z + pz * halfWidth;
+          const rx = x - px * halfWidth;
+          const rz = z - pz * halfWidth;
+
+          positions.push(lx, y, lz);
+          positions.push(rx, y, rz);
+
+          normals.push(0, 1, 0);
+          normals.push(0, 1, 0);
+
+          const t = pts.length > 1 ? i / (pts.length - 1) : 0;
+          uvs.push(t, 0);
+          uvs.push(t, 1);
         }
 
-        const len = Math.sqrt(dx * dx + dz * dz) || 1;
-        dx /= len;
-        dz /= len;
+        for (let i = 0; i < pts.length - 1; i++) {
+          const a = 2 * i;
+          const b = 2 * i + 1;
+          const c = 2 * (i + 1);
+          const d = 2 * (i + 1) + 1;
 
-        // Perpendicular no plano XZ
-        const px = -dz;
-        const pz = dx;
+          indices.push(a, c, b);
+          indices.push(c, d, b);
+        }
 
-        const lx = x + px * halfWidth;
-        const lz = z + pz * halfWidth;
-        const rx = x - px * halfWidth;
-        const rz = z - pz * halfWidth;
+        const geometry = new THREE.BufferGeometry();
+        const posAttr = new THREE.Float32BufferAttribute(positions, 3);
+        const normalAttr = new THREE.Float32BufferAttribute(normals, 3);
+        const uvAttr = new THREE.Float32BufferAttribute(uvs, 2);
+        geometry.setAttribute('position', posAttr);
+        geometry.setAttribute('normal', normalAttr);
+        geometry.setAttribute('uv', uvAttr);
+        geometry.setIndex(indices);
+        geometry.computeBoundingSphere();
 
-        positions.push(lx, y, lz);
-        positions.push(rx, y, rz);
+        // Marcar como estático para otimizações
+        try {
+          posAttr.setUsage(THREE.StaticDrawUsage);
+          normalAttr.setUsage(THREE.StaticDrawUsage);
+          uvAttr.setUsage(THREE.StaticDrawUsage);
+          if (geometry.index) geometry.index.setUsage(THREE.StaticDrawUsage);
+        } catch (e) {
+          // alguns builds podem não suportar setUsage, ignorar
+        }
 
-        normals.push(0, 1, 0);
-        normals.push(0, 1, 0);
+        return geometry;
+      };
 
-        const t = pts.length > 1 ? i / (pts.length - 1) : 0;
-        uvs.push(t, 0);
-        uvs.push(t, 1);
-      }
+      // Construir geometria do contorno (um pouco mais larga)
+      const outlineGap = Math.max(0.4, ( (road.width || 6) * (MAP_CONFIG.ROAD_WIDTH_MULTIPLIER || 1) / 2) * 0.08);
+      const outlineGeom = buildRibbon(half + outlineGap, outlineY);
 
-      for (let i = 0; i < pts.length - 1; i++) {
-        const a = 2 * i;
-        const b = 2 * i + 1;
-        const c = 2 * (i + 1);
-        const d = 2 * (i + 1) + 1;
+      // Geometria principal da via
+      const mainGeom = buildRibbon(half, mainY);
 
-        indices.push(a, c, b);
-        indices.push(c, d, b);
-      }
+      cached = { outlineGeom, mainGeom };
+      roadGeomCache.set(cacheKey, cached);
+    }
 
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-      geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
-      geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-      geometry.setIndex(indices);
-      geometry.computeBoundingSphere();
-      return geometry;
-    };
-
-    // Construir geometria do contorno (um pouco mais larga)
-    const outlineGap = Math.max(0.4, width * 0.08);
-    const outlineGeom = buildRibbon(half + outlineGap, outlineY);
-
-    // Geometria principal da via
-    const mainGeom = buildRibbon(half, mainY);
+    const outlineGeom = cached.outlineGeom;
+    const mainGeom = cached.mainGeom;
 
     // Cores
     const roadColor = road.color || 0x333333;
