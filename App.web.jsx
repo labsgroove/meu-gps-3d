@@ -11,24 +11,154 @@ export default function AppWeb() {
   const [mapError, setMapError] = useState(false);
   const [coordInput, setCoordInput] = useState('');
   const [inputError, setInputError] = useState(null);
+  const [locationEnabled, setLocationEnabled] = useState(false);
+  const [watchId, setWatchId] = useState(null);
+
+  // Função para carregar localização do localStorage
+  const loadStoredLocation = () => {
+    const stored = localStorage.getItem('deviceLocation');
+    if (stored) {
+      try {
+        return JSON.parse(stored);
+      } catch (e) {
+        console.error('Erro ao ler localização do localStorage:', e);
+      }
+    }
+    return null;
+  };
+
+  // Função para salvar localização no localStorage
+  const saveLocationToStorage = (loc) => {
+    try {
+      localStorage.setItem('deviceLocation', JSON.stringify(loc));
+    } catch (e) {
+      console.error('Erro ao salvar localização no localStorage:', e);
+    }
+  };
+
+  // Função para inicializar geolocation
+  const initializeGeolocation = (callback) => {
+    if (!navigator.geolocation) {
+      console.warn('Geolocation não suportada');
+      return;
+    }
+
+    setLocationEnabled(true);
+
+    // Tentar pegar localização atual primeiro
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const loc = {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          altitude: position.coords.altitude || 0,
+          accuracy: position.coords.accuracy,
+        };
+        saveLocationToStorage(loc);
+        if (callback) callback(loc);
+      },
+      (err) => {
+        console.warn('Erro ao obter localização atual:', err.message);
+        // Se falhar, usar localização armazenada ou padrão
+        const stored = loadStoredLocation();
+        if (stored && callback) {
+          callback(stored);
+        }
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0,
+      }
+    );
+
+    // Depois, monitorar mudanças de localização
+    const id = navigator.geolocation.watchPosition(
+      (position) => {
+        const loc = {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          altitude: position.coords.altitude || 0,
+          accuracy: position.coords.accuracy,
+        };
+        saveLocationToStorage(loc);
+        setLocation(loc);
+      },
+      (err) => {
+        console.warn('Erro ao monitorar localização:', err.message);
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0,
+      }
+    );
+
+    setWatchId(id);
+  };
+
+  // Função para centralizar na localização do dispositivo
+  const handleCenterOnDevice = () => {
+    if (!navigator.geolocation) {
+      setInputError('Geolocalização não suportada');
+      return;
+    }
+
+    setInputError(null);
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const lat = position.coords.latitude;
+        const lon = position.coords.longitude;
+        const loc = { latitude: lat, longitude: lon, altitude: 0, accuracy: 5 };
+
+        try {
+          setLoading(true);
+          setLocation(loc);
+          saveLocationToStorage(loc);
+          const data = await fetchMapData(lat, lon, 0.5);
+          setMapData(data);
+          setMapError(false);
+        } catch (err) {
+          console.error('Erro ao carregar mapa para localização do dispositivo:', err);
+          setMapError(true);
+          setInputError('Falha ao carregar mapa');
+        } finally {
+          setLoading(false);
+        }
+      },
+      (err) => {
+        console.error('Erro ao obter localização do dispositivo:', err);
+        setInputError('Não foi possível obter a localização. Verifique as permissões.');
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0,
+      }
+    );
+  };
 
   useEffect(() => {
     (async () => {
       try {
-        // Mock de localização para web
-        // São Paulo, Brasil
-        const mockLocation = {
-          latitude: -25.4957255,
-          longitude: -49.1658802,
-          altitude: 0,
-          accuracy: 5,
-        };
+        // Tentar carregr localização armazenada primeiro
+        let initialLoc = loadStoredLocation();
 
-        setLocation(mockLocation);
+        // Se não houver localização armazenada, usar padrão
+        if (!initialLoc) {
+          initialLoc = {
+            latitude: -25.4957255,
+            longitude: -49.1658802,
+            altitude: 0,
+            accuracy: 5,
+          };
+        }
+
+        setLocation(initialLoc);
         setLoading(true);
 
         try {
-          const data = await fetchMapData(mockLocation.latitude, mockLocation.longitude, 0.5);
+          const data = await fetchMapData(initialLoc.latitude, initialLoc.longitude, 0.5);
           setMapData(data);
           setMapError(false);
         } catch (err) {
@@ -37,12 +167,24 @@ export default function AppWeb() {
         }
 
         setLoading(false);
+
+        // Inicializar geolocation após carregar o mapa
+        initializeGeolocation((newLoc) => {
+          setLocation(newLoc);
+        });
       } catch (err) {
         console.error('Location error:', err);
         setError('Erro ao inicializar: ' + err.message);
         setLoading(false);
       }
     })();
+
+    // Cleanup
+    return () => {
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+      }
+    };
   }, []);
 
   const handleGoToCoordinates = async () => {
@@ -67,6 +209,7 @@ export default function AppWeb() {
     try {
       setLoading(true);
       setLocation(newLoc);
+      saveLocationToStorage(newLoc);
       const data = await fetchMapData(lat, lon, 0.5);
       setMapData(data);
       setMapError(false);
@@ -93,6 +236,11 @@ export default function AppWeb() {
                 onKeyDown={(e) => { if (e.key === 'Enter') handleGoToCoordinates(); }}
               />
               <button onClick={handleGoToCoordinates}>Ir</button>
+              {locationEnabled && (
+                <button onClick={handleCenterOnDevice} title="Centralizar na localização do dispositivo">
+                  📍
+                </button>
+              )}
               {inputError && <div className="coord-error">{inputError}</div>}
             </div>
             <Map3DSceneWeb mapData={mapData} zoom={60} location={location} onLocationChange={setLocation} />
