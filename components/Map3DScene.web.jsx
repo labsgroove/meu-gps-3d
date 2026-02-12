@@ -1,5 +1,5 @@
 import React, { useRef, useState, useMemo, memo, useEffect } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { MAP_CONFIG, MATERIALS } from '../config/mapConfig';
@@ -16,6 +16,13 @@ const roadGeomCache = new Map();
 function mapToSceneCoord(p) {
   if (!p) return [0, 0];
   return [MIRROR_X ? -p[0] : p[0], p[1]];
+}
+
+// Converter de coordenadas de cena (x,z) de volta para lon/lat
+function sceneToMapCoord(scenePoint) {
+  if (!scenePoint) return [0, 0];
+  const [x, z] = scenePoint;
+  return [MIRROR_X ? -x : x, z];
 }
 
 // Função para calcular a orientação perpendicular às ruas próximas (com cache)
@@ -332,8 +339,9 @@ const LocationMarker = memo(function LocationMarker({ position }) {
 });
 
 // Componente principal da cena
-function SceneContent({ mapData, location, moveRef }) {
+function SceneContent({ mapData, location, moveRef, onLocationChange, zoom = 50 }) {
   const controlsRef = useRef();
+  const { camera } = useThree();
   const [pointPosition, setPointPosition] = useState([0, 1, 0]);
   const keysPressed = useRef({});
 
@@ -363,13 +371,27 @@ function SceneContent({ mapData, location, moveRef }) {
     };
   }, []);
 
-  useFrame(() => {
-    if (controlsRef.current) {
-      try {
+  useFrame((state, delta) => {
+    // Mantém o ponto como target do OrbitControls com suavização — permite órbita/zoom centrados no ponto
+    if (pointPosition && controlsRef.current) {
+      const pos = pointPosition;
+      const desiredTarget = new THREE.Vector3(pos[0], pos[1], pos[2]);
+      // Suaviza o movimento do target para evitar saltos bruscos
+      controlsRef.current.target.lerp(desiredTarget, Math.min(1, 0.12 + delta * 10));
+
+      // Inicializa a posição da câmera uma vez (mantendo uma distância/offset inicial)
+      if (!controlsRef.current.__initialized) {
+        const offset = new THREE.Vector3(0, zoom, zoom);
+        camera.position.set(pos[0] + offset.x, pos[1] + offset.y, pos[2] + offset.z);
         controlsRef.current.update();
-      } catch (e) {
-        // Ignore control update errors
+        controlsRef.current.__initialized = true;
+      } else {
+        // Não sobrescrever camera.position durante a interação — o OrbitControls gerencia órbita/zoom
+        controlsRef.current.update();
       }
+    } else if (pointPosition) {
+      // fallback se controls não estiver pronto
+      camera.lookAt(pointPosition[0], pointPosition[1], pointPosition[2]);
     }
 
     // Atualizar posição do ponto baseado em WASD ou controles mobile
@@ -378,28 +400,46 @@ function SceneContent({ mapData, location, moveRef }) {
     const mobile = moveRef?.current || {};
 
     let moved = false;
+
     setPointPosition((prev) => {
       let newPos = [...prev];
 
       // Controles de teclado (WASD)
       if (keys['w'] || mobile.up) {
-        newPos[2] -= moveSpeed; // Z negativo
+        newPos[2] -= moveSpeed;
         moved = true;
       }
       if (keys['s'] || mobile.down) {
-        newPos[2] += moveSpeed; // Z positivo
+        newPos[2] += moveSpeed;
         moved = true;
       }
       if (keys['a'] || mobile.left) {
-        newPos[0] -= moveSpeed; // X negativo
+        newPos[0] -= moveSpeed;
         moved = true;
       }
       if (keys['d'] || mobile.right) {
-        newPos[0] += moveSpeed; // X positivo
+        newPos[0] += moveSpeed;
         moved = true;
       }
 
-      return moved ? newPos : prev;
+      // If moved, notify parent with map coords (lon/lat)
+      if (moved) {
+        if (typeof onLocationChange === 'function') {
+          const [lon, lat] = sceneToMapCoord([newPos[0], newPos[2]]);
+          try {
+            onLocationChange({
+              latitude: lat,
+              longitude: lon,
+              altitude: newPos[1] || 0,
+              accuracy: location?.accuracy ?? 5,
+            });
+          } catch (e) {
+            // ignore callback errors
+          }
+        }
+        return newPos;
+      }
+      return prev;
     });
   });
 
@@ -438,7 +478,12 @@ function SceneContent({ mapData, location, moveRef }) {
         dampingFactor={0.05}
         autoRotate={false}
         enableZoom={true}
-        enablePan={true}
+        enablePan={false}
+        rotateSpeed={0.6}
+        minDistance={10}
+        maxDistance={1500}
+        minPolarAngle={0.1}
+        maxPolarAngle={Math.PI / 2}
       />
 
       {roads.map((road) => (
@@ -459,7 +504,7 @@ function SceneContent({ mapData, location, moveRef }) {
   );
 }
 
-export default function Map3DSceneWeb({ mapData, zoom = 50, location }) {
+export default function Map3DSceneWeb({ mapData, zoom = 50, location, onLocationChange }) {
   const [mobileControls, setMobileControls] = useState(false);
   const moveRef = useRef({ up: false, down: false, left: false, right: false });
 
@@ -497,7 +542,7 @@ export default function Map3DSceneWeb({ mapData, zoom = 50, location }) {
         dpr={[1, Math.min(window.devicePixelRatio, 2)]}
         style={{ width: '100%', height: '100%' }}
       >
-        <SceneContent mapData={mapData} location={location} moveRef={moveRef} />
+        <SceneContent mapData={mapData} location={location} moveRef={moveRef} onLocationChange={onLocationChange} zoom={zoom} />
       </Canvas>
 
       {mobileControls && (

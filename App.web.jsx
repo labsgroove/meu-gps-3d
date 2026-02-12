@@ -18,8 +18,8 @@ export default function AppWeb() {
         // Mock de localização para web
         // São Paulo, Brasil
         const mockLocation = {
-          latitude: -25.5022141,
-          longitude: -49.1837419,
+          latitude: -25.4957255,
+          longitude: -49.1658802,
           altitude: 0,
           accuracy: 10,
         };
@@ -95,7 +95,7 @@ export default function AppWeb() {
               <button onClick={handleGoToCoordinates}>Ir</button>
               {inputError && <div className="coord-error">{inputError}</div>}
             </div>
-            <Map3DSceneWeb mapData={mapData} zoom={60} location={location} />
+            <Map3DSceneWeb mapData={mapData} zoom={60} location={location} onLocationChange={setLocation} />
           </div>
           <div className="status-bar">
             <div className="status-text">
