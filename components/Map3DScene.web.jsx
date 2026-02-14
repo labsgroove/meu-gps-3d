@@ -1,8 +1,8 @@
-import React, { useRef, useState, useMemo, memo, useEffect } from 'react';
-import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { OrbitControls } from '@react-three/drei';
-import * as THREE from 'three';
-import { MAP_CONFIG, MATERIALS } from '../config/mapConfig';
+import React, { useRef, useState, memo, useEffect } from "react";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { OrbitControls } from "@react-three/drei";
+import * as THREE from "three";
+import { MAP_CONFIG, MATERIALS } from "../config/mapConfig.js";
 
 // Se o mapa estiver espelhado no seu input, ative esse flag para inverter X
 const MIRROR_X = true;
@@ -18,22 +18,39 @@ function mapToSceneCoord(p) {
   return [MIRROR_X ? -p[0] : p[0], p[1]];
 }
 
-// Converter de coordenadas de cena (x,z) de volta para lon/lat
-function sceneToMapCoord(scenePoint) {
-  if (!scenePoint) return [0, 0];
-  const [x, z] = scenePoint;
-  return [MIRROR_X ? -x : x, z];
+function locationDeltaMeters(currentLocation, anchorLocation) {
+  if (!currentLocation || !anchorLocation) return [0, 0];
+  const anchorLat = anchorLocation.latitude;
+  const safeCos = Math.max(0.00001, Math.cos((anchorLat * Math.PI) / 180));
+  const metersPerDegreeLat = 111320;
+  const metersPerDegreeLon = 111320 * safeCos;
+
+  const deltaX =
+    (currentLocation.longitude - anchorLocation.longitude) * metersPerDegreeLon;
+  const deltaZ =
+    (currentLocation.latitude - anchorLocation.latitude) * metersPerDegreeLat;
+
+  const distance = Math.hypot(deltaX, deltaZ);
+  if (!Number.isFinite(distance)) return [0, 0];
+  // Evita deslocar o mundo para muito longe quando GPS muda bruscamente.
+  if (distance > MAP_CONFIG.ACTIVE_RADIUS_METERS * 1.2) return [0, 0];
+
+  return [deltaX, deltaZ];
 }
 
 // Função para calcular a orientação perpendicular às ruas próximas (com cache)
-function calculatePerpendiculalOrientation(buildingPoints, roads) {
-  const cacheKey = `${buildingPoints.map(p => p.join(',')).join(';')}`;
-  
+function calculatePerpendiculalOrientation(buildingId, buildingPoints, roads) {
+  const cacheKey =
+    buildingId !== undefined && buildingId !== null
+      ? `b-${buildingId}`
+      : `${buildingPoints.map((p) => p.join(",")).join(";")}`;
+
   if (orientationCache.has(cacheKey)) {
     return orientationCache.get(cacheKey);
   }
 
   if (!roads || roads.length === 0) return 0;
+  if (roads.length > 240) return 0;
 
   // Calcular centroide do prédio (aplicando transformação de coordenadas)
   const mapped = buildingPoints.map((p) => mapToSceneCoord(p));
@@ -84,15 +101,24 @@ const Building = memo(function Building({ building, roads }) {
   try {
     // Calcular centroide no sistema de cena (aplica mapToSceneCoord)
     const mappedPoints = building.points.map((p) => mapToSceneCoord(p));
-    const centerX = mappedPoints.reduce((sum, p) => sum + p[0], 0) / mappedPoints.length;
-    const centerY = mappedPoints.reduce((sum, p) => sum + p[1], 0) / mappedPoints.length;
+    const centerX =
+      mappedPoints.reduce((sum, p) => sum + p[0], 0) / mappedPoints.length;
+    const centerY =
+      mappedPoints.reduce((sum, p) => sum + p[1], 0) / mappedPoints.length;
 
     // Calcular orientação perpendicular às ruas (calculatePerpendiculalOrientation aplica mapeamento internamente)
-    let rotation = calculatePerpendiculalOrientation(building.points, roads);
+    let rotation = calculatePerpendiculalOrientation(
+      building.id,
+      building.points,
+      roads,
+    );
     if (MIRROR_X) rotation = -rotation;
 
     // Criar shape em coordenadas locais (centralizadas no centroide, em sistema de cena)
-    const localPoints = mappedPoints.map((p) => [p[0] - centerX, p[1] - centerY]);
+    const localPoints = mappedPoints.map((p) => [
+      p[0] - centerX,
+      p[1] - centerY,
+    ]);
 
     const shape = new THREE.Shape();
     shape.moveTo(localPoints[0][0], localPoints[0][1]);
@@ -114,17 +140,21 @@ const Building = memo(function Building({ building, roads }) {
 
     // Posicionar o mesh no centroide e rotacionar em Y para alinhar com a rua
     return (
-      <mesh geometry={geometry} position={[centerX, 0, centerY]} rotation={[0, rotation, 0]}>
-        <meshStandardMaterial 
-          color={color} 
-          metalness={0.2} 
+      <mesh
+        geometry={geometry}
+        position={[centerX, 0, centerY]}
+        rotation={[0, rotation, 0]}
+      >
+        <meshStandardMaterial
+          color={color}
+          metalness={0.2}
           roughness={0.7}
           shadowMap={false}
         />
       </mesh>
     );
   } catch (e) {
-    console.warn('Building render error:', e.message);
+    console.warn("Building render error:", e.message);
     return null;
   }
 });
@@ -138,14 +168,20 @@ const Road = memo(function Road({ road }) {
   try {
     // Converter pontos para coordenadas da cena
     const pts = road.points.map((p) => mapToSceneCoord(p));
+    const anchor = pts[0];
+    const localPts = pts.map((p) => [p[0] - anchor[0], p[1] - anchor[1]]);
 
-    // Cache key baseado no id e características
-    const cacheKey = `road-${road.id}-${pts.length}-${road.width || ''}`;
+    // Cache key baseado na forma local da rua (invariante à translação do observador)
+    const lastLocal = localPts[localPts.length - 1] || [0, 0];
+    const cacheKey = `road-${road.id}-${road.width || ""}-${localPts.length}-${Math.round(
+      lastLocal[0],
+    )}-${Math.round(lastLocal[1])}`;
 
     let cached = roadGeomCache.get(cacheKey);
     if (!cached) {
       // Largura base (em metros) aplicada com multiplicador global
-      const baseWidth = (road.width || 6) * (MAP_CONFIG.ROAD_WIDTH_MULTIPLIER || 1);
+      const baseWidth =
+        (road.width || 6) * (MAP_CONFIG.ROAD_WIDTH_MULTIPLIER || 1);
       const width = Math.max(0.5, baseWidth);
       const half = width / 2;
 
@@ -161,20 +197,20 @@ const Road = memo(function Road({ road }) {
         const uvs = [];
         const indices = [];
 
-        for (let i = 0; i < pts.length; i++) {
-          const p = pts[i];
+        for (let i = 0; i < localPts.length; i++) {
+          const p = localPts[i];
           const x = p[0];
           const z = p[1];
 
           // Tangente aproximada
           let dx = 0;
           let dz = 0;
-          if (i < pts.length - 1) {
-            dx = pts[i + 1][0] - x;
-            dz = pts[i + 1][1] - z;
+          if (i < localPts.length - 1) {
+            dx = localPts[i + 1][0] - x;
+            dz = localPts[i + 1][1] - z;
           } else {
-            dx = x - pts[i - 1][0];
-            dz = z - pts[i - 1][1];
+            dx = x - localPts[i - 1][0];
+            dz = z - localPts[i - 1][1];
           }
 
           const len = Math.sqrt(dx * dx + dz * dz) || 1;
@@ -196,12 +232,12 @@ const Road = memo(function Road({ road }) {
           normals.push(0, 1, 0);
           normals.push(0, 1, 0);
 
-          const t = pts.length > 1 ? i / (pts.length - 1) : 0;
+          const t = localPts.length > 1 ? i / (localPts.length - 1) : 0;
           uvs.push(t, 0);
           uvs.push(t, 1);
         }
 
-        for (let i = 0; i < pts.length - 1; i++) {
+        for (let i = 0; i < localPts.length - 1; i++) {
           const a = 2 * i;
           const b = 2 * i + 1;
           const c = 2 * (i + 1);
@@ -215,13 +251,12 @@ const Road = memo(function Road({ road }) {
         const posAttr = new THREE.Float32BufferAttribute(positions, 3);
         const normalAttr = new THREE.Float32BufferAttribute(normals, 3);
         const uvAttr = new THREE.Float32BufferAttribute(uvs, 2);
-        geometry.setAttribute('position', posAttr);
-        geometry.setAttribute('normal', normalAttr);
-        geometry.setAttribute('uv', uvAttr);
+        geometry.setAttribute("position", posAttr);
+        geometry.setAttribute("normal", normalAttr);
+        geometry.setAttribute("uv", uvAttr);
         geometry.setIndex(indices);
         geometry.computeBoundingSphere();
 
-        // Marcar como estático para otimizações
         try {
           posAttr.setUsage(THREE.StaticDrawUsage);
           normalAttr.setUsage(THREE.StaticDrawUsage);
@@ -235,7 +270,11 @@ const Road = memo(function Road({ road }) {
       };
 
       // Construir geometria do contorno (um pouco mais larga)
-      const outlineGap = Math.max(0.4, ( (road.width || 6) * (MAP_CONFIG.ROAD_WIDTH_MULTIPLIER || 1) / 2) * 0.08);
+      const outlineGap = Math.max(
+        0.4,
+        (((road.width || 6) * (MAP_CONFIG.ROAD_WIDTH_MULTIPLIER || 1)) / 2) *
+          0.08,
+      );
       const outlineGeom = buildRibbon(half + outlineGap, outlineY);
 
       // Geometria principal da via
@@ -248,14 +287,16 @@ const Road = memo(function Road({ road }) {
     const outlineGeom = cached.outlineGeom;
     const mainGeom = cached.mainGeom;
 
-    // Cores
+    if (roadGeomCache.size > 2500) {
+      roadGeomCache.clear();
+    }
+
     const roadColor = road.color || 0x333333;
-    // Contorno: escurece a cor principal para criar contraste
     const outlineColor = 0x000000;
 
     return (
-      <group position={[0, 0, 0]}>
-        <mesh geometry={outlineGeom} position={[0, 0, 0]}> 
+      <group position={[anchor[0], 0, anchor[1]]}>
+        <mesh geometry={outlineGeom} position={[0, 0, 0]}>
           <meshStandardMaterial
             color={outlineColor}
             side={THREE.DoubleSide}
@@ -267,10 +308,10 @@ const Road = memo(function Road({ road }) {
           />
         </mesh>
 
-        <mesh geometry={mainGeom} position={[0, 0, 0]}> 
-          <meshStandardMaterial 
-            color={roadColor} 
-            roughness={MATERIALS.road?.roughness ?? 0.9} 
+        <mesh geometry={mainGeom} position={[0, 0, 0]}>
+          <meshStandardMaterial
+            color={roadColor}
+            roughness={MATERIALS.road?.roughness ?? 0.9}
             metalness={MATERIALS.road?.metalness ?? 0}
             side={THREE.DoubleSide}
             shadowMap={false}
@@ -282,7 +323,7 @@ const Road = memo(function Road({ road }) {
       </group>
     );
   } catch (e) {
-    console.warn('Road render error:', e.message);
+    console.warn("Road render error:", e.message);
     return null;
   }
 });
@@ -298,14 +339,14 @@ const Amenity = memo(function Amenity({ amenity }) {
     return (
       <mesh position={[pos[0], amenity.position[2] || 1, pos[1]]}>
         <cylinderGeometry args={[0.8, 0.8, 2, 8]} />
-        <meshStandardMaterial 
+        <meshStandardMaterial
           color={amenity.color || 0x00ffff}
           shadowMap={false}
         />
       </mesh>
     );
   } catch (e) {
-    console.warn('Amenity render error:', e.message);
+    console.warn("Amenity render error:", e.message);
     return null;
   }
 });
@@ -328,7 +369,7 @@ const LocationMarker = memo(function LocationMarker({ position }) {
   return (
     <mesh ref={meshRef} position={position}>
       <sphereGeometry args={[2, 32, 32]} />
-      <meshStandardMaterial 
+      <meshStandardMaterial
         color={0xff0000}
         metalness={0.5}
         roughness={0.3}
@@ -339,12 +380,23 @@ const LocationMarker = memo(function LocationMarker({ position }) {
 });
 
 // Componente principal da cena
-function SceneContent({ mapData, location, moveRef, onLocationChange, zoom = 50 }) {
+function SceneContent({
+  mapData,
+  moveRef,
+  onObserverMove,
+  zoom = 50,
+  location,
+  renderAnchor,
+}) {
   const controlsRef = useRef();
   const { camera } = useThree();
   const [pointPosition] = useState([0, 1, 0]); // Sempre fixo no centro
-  const [worldOffset, setWorldOffset] = useState([0, 0]); // Offset do mundo que se move inversamente
   const keysPressed = useRef({});
+  const movementAccumulator = useRef({
+    deltaX: 0,
+    deltaZ: 0,
+    elapsedMs: 0,
+  });
 
   // Controlar movimento com WASD
   useEffect(() => {
@@ -355,12 +407,12 @@ function SceneContent({ mapData, location, moveRef, onLocationChange, zoom = 50 
       keysPressed.current[e.key.toLowerCase()] = false;
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
 
     return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
     };
   }, []);
 
@@ -370,12 +422,19 @@ function SceneContent({ mapData, location, moveRef, onLocationChange, zoom = 50 
       const pos = pointPosition;
       const desiredTarget = new THREE.Vector3(pos[0], pos[1], pos[2]);
       // Suaviza o movimento do target para evitar saltos bruscos
-      controlsRef.current.target.lerp(desiredTarget, Math.min(1, 0.12 + delta * 10));
+      controlsRef.current.target.lerp(
+        desiredTarget,
+        Math.min(1, 0.12 + delta * 10),
+      );
 
       // Inicializa a posição da câmera uma vez (mantendo uma distância/offset inicial)
       if (!controlsRef.current.__initialized) {
         const offset = new THREE.Vector3(0, zoom, zoom);
-        camera.position.set(pos[0] + offset.x, pos[1] + offset.y, pos[2] + offset.z);
+        camera.position.set(
+          pos[0] + offset.x,
+          pos[1] + offset.y,
+          pos[2] + offset.z,
+        );
         controlsRef.current.update();
         controlsRef.current.__initialized = true;
       } else {
@@ -384,43 +443,48 @@ function SceneContent({ mapData, location, moveRef, onLocationChange, zoom = 50 
       }
     }
 
-    // Atualizar o offset do mundo baseado em WASD ou controles mobile (movimento invertido)
-    const moveSpeed = 0.5;
     const keys = keysPressed.current;
     const mobile = moveRef?.current || {};
+    const inputX =
+      (keys["d"] || mobile.right ? 1 : 0) - (keys["a"] || mobile.left ? 1 : 0);
+    const inputZ =
+      (keys["w"] || mobile.up ? 1 : 0) - (keys["s"] || mobile.down ? 1 : 0);
 
-    let moved = false;
+    if (inputX !== 0 || inputZ !== 0) {
+      const speedMetersPerSecond = MAP_CONFIG.MOVEMENT_SPEED_MPS || 20;
+      const inputLength = Math.hypot(inputX, inputZ) || 1;
+      const normalizedX = inputX / inputLength;
+      const normalizedZ = inputZ / inputLength;
+      const stepMeters = speedMetersPerSecond * delta;
 
-    setWorldOffset((prev) => {
-      let newOffset = [...prev];
+      movementAccumulator.current.deltaX +=
+        (MIRROR_X ? -normalizedX : normalizedX) * stepMeters;
+      movementAccumulator.current.deltaZ += normalizedZ * stepMeters;
+    }
 
-      // Controles de teclado (WASD) - INVERTIDOS para mover o mundo
-      // W deve mover o mundo para trás (offset negativo em Z)
-      // S deve mover o mundo para frente (offset positivo em Z)
-      if (keys['w'] || mobile.up) {
-        newOffset[1] -= moveSpeed; // Z negativo (mundo se move para trás)
-        moved = true;
-      }
-      if (keys['s'] || mobile.down) {
-        newOffset[1] += moveSpeed; // Z positivo (mundo se move para frente)
-        moved = true;
-      }
-      // A deve mover o mundo para direita (offset positivo em X)
-      // D deve mover o mundo para esquerda (offset negativo em X)
-      if (keys['a'] || mobile.left) {
-        newOffset[0] += moveSpeed; // X positivo (mundo se move para direita)
-        moved = true;
-      }
-      if (keys['d'] || mobile.right) {
-        newOffset[0] -= moveSpeed; // X negativo (mundo se move para esquerda)
-        moved = true;
-      }
+    movementAccumulator.current.elapsedMs += delta * 1000;
+    const pendingDistance = Math.hypot(
+      movementAccumulator.current.deltaX,
+      movementAccumulator.current.deltaZ,
+    );
+    const moveFlushInterval = MAP_CONFIG.MOVEMENT_UPDATE_INTERVAL_MS || 80;
+    const moveFlushDistance = MAP_CONFIG.MIN_MOVEMENT_UPDATE_METERS || 0.35;
+    const shouldFlush =
+      pendingDistance >= moveFlushDistance ||
+      movementAccumulator.current.elapsedMs >= moveFlushInterval;
 
-      if (moved) {
-        return newOffset;
+    if (shouldFlush) {
+      const hasPendingMovement = pendingDistance > 0.0001;
+      if (hasPendingMovement && typeof onObserverMove === "function") {
+        onObserverMove(
+          movementAccumulator.current.deltaX,
+          movementAccumulator.current.deltaZ,
+        );
       }
-      return prev;
-    });
+      movementAccumulator.current.deltaX = 0;
+      movementAccumulator.current.deltaZ = 0;
+      movementAccumulator.current.elapsedMs = 0;
+    }
   });
 
   if (!mapData) {
@@ -430,24 +494,21 @@ function SceneContent({ mapData, location, moveRef, onLocationChange, zoom = 50 
   const buildings = mapData.buildings || [];
   const roads = mapData.roads || [];
   const amenities = mapData.amenities || [];
-
-  const hasData = buildings.length > 0 || roads.length > 0;
-
-  if (!hasData) {
-    return (
-      <>
-        <ambientLight intensity={1} />
-        <fog attach="fog" args={[0x87ceeb, 100, 2000]} />
-      </>
-    );
-  }
+  const observerDelta = locationDeltaMeters(location, renderAnchor);
+  const deltaScene = mapToSceneCoord(observerDelta);
+  const maxShift = MAP_CONFIG.ACTIVE_RADIUS_METERS * 0.65;
+  const worldShift = [
+    Math.max(-maxShift, Math.min(maxShift, -deltaScene[0])),
+    0,
+    Math.max(-maxShift, Math.min(maxShift, -deltaScene[1])),
+  ];
 
   return (
     <>
       <ambientLight intensity={1} />
 
-      {/* Grupo que contém todo o mapa - translada com worldOffset inverso */}
-      <group position={[-worldOffset[0], 0, -worldOffset[1]]}>
+      {/* Grupo que contém todo o mapa já relativo ao observador */}
+      <group position={worldShift}>
         {/* Solo (ground) */}
         <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]}>
           <planeGeometry args={[2000, 2000]} />
@@ -459,7 +520,11 @@ function SceneContent({ mapData, location, moveRef, onLocationChange, zoom = 50 
         ))}
 
         {buildings.map((building) => (
-          <Building key={`b-${building.id}`} building={building} roads={roads} />
+          <Building
+            key={`b-${building.id}`}
+            building={building}
+            roads={roads}
+          />
         ))}
 
         {amenities.map((amenity) => (
@@ -487,15 +552,22 @@ function SceneContent({ mapData, location, moveRef, onLocationChange, zoom = 50 
   );
 }
 
-export default function Map3DSceneWeb({ mapData, zoom = 50, location, onLocationChange }) {
+export default function Map3DSceneWeb({
+  mapData,
+  zoom = 50,
+  onObserverMove,
+  location,
+  renderAnchor,
+}) {
   const [mobileControls, setMobileControls] = useState(false);
   const moveRef = useRef({ up: false, down: false, left: false, right: false });
 
   // Detectar se é mobile
   useEffect(() => {
-    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
-      navigator.userAgent
-    );
+    const isMobile =
+      /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+        navigator.userAgent,
+      );
     setMobileControls(isMobile);
   }, []);
 
@@ -508,7 +580,7 @@ export default function Map3DSceneWeb({ mapData, zoom = 50, location, onLocation
   };
 
   return (
-    <div style={{ width: '100%', height: '100%', position: 'relative' }}>
+    <div style={{ width: "100%", height: "100%", position: "relative" }}>
       <Canvas
         camera={{
           position: [0, zoom, zoom],
@@ -519,106 +591,113 @@ export default function Map3DSceneWeb({ mapData, zoom = 50, location, onLocation
         gl={{
           antialias: false,
           alpha: true,
-          powerPreference: 'high-performance',
+          powerPreference: "high-performance",
           pixelRatio: Math.min(window.devicePixelRatio, 2),
         }}
         dpr={[1, Math.min(window.devicePixelRatio, 2)]}
-        style={{ width: '100%', height: '100%' }}
+        style={{ width: "100%", height: "100%" }}
       >
-        <SceneContent mapData={mapData} location={location} moveRef={moveRef} onLocationChange={onLocationChange} zoom={zoom} />
+        <SceneContent
+          mapData={mapData}
+          moveRef={moveRef}
+          onObserverMove={onObserverMove}
+          zoom={zoom}
+          location={location}
+          renderAnchor={renderAnchor}
+        />
       </Canvas>
 
       {mobileControls && (
         <div
           style={{
-            position: 'absolute',
-            bottom: '20px',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            display: 'grid',
-            gridTemplateColumns: 'repeat(3, 50px)',
-            gap: '5px',
+            position: "absolute",
+            bottom: "20px",
+            left: "50%",
+            transform: "translateX(-50%)",
+            display: "grid",
+            gridTemplateColumns: "repeat(3, 50px)",
+            gap: "5px",
             zIndex: 100,
           }}
         >
-          <div style={{ gridColumn: '2' }}>
+          <div style={{ gridColumn: "2" }}>
             <button
-              onMouseDown={() => handleMoveStart('up')}
-              onMouseUp={() => handleMoveEnd('up')}
-              onTouchStart={() => handleMoveStart('up')}
-              onTouchEnd={() => handleMoveEnd('up')}
+              onMouseDown={() => handleMoveStart("up")}
+              onMouseUp={() => handleMoveEnd("up")}
+              onTouchStart={() => handleMoveStart("up")}
+              onTouchEnd={() => handleMoveEnd("up")}
               style={{
-                width: '50px',
-                height: '50px',
-                fontSize: '24px',
-                borderRadius: '50%',
-                border: '2px solid #333',
-                backgroundColor: '#fff',
-                cursor: 'pointer',
-                fontWeight: 'bold',
+                width: "50px",
+                height: "50px",
+                fontSize: "24px",
+                borderRadius: "50%",
+                border: "2px solid #333",
+                backgroundColor: "#fff",
+                cursor: "pointer",
+                fontWeight: "bold",
               }}
             >
               ↑
             </button>
           </div>
 
-          <div style={{ gridColumn: '1' }}>
+          <div style={{ gridColumn: "1" }}>
             <button
-              onMouseDown={() => handleMoveStart('left')}
-              onMouseUp={() => handleMoveEnd('left')}
-              onTouchStart={() => handleMoveStart('left')}
-              onTouchEnd={() => handleMoveEnd('left')}
+              onMouseDown={() => handleMoveStart("left")}
+              onMouseUp={() => handleMoveEnd("left")}
+              onTouchStart={() => handleMoveStart("left")}
+              onTouchEnd={() => handleMoveEnd("left")}
               style={{
-                width: '50px',
-                height: '50px',
-                fontSize: '24px',
-                borderRadius: '50%',
-                border: '2px solid #333',
-                backgroundColor: '#fff',
-                cursor: 'pointer',
-                fontWeight: 'bold',
+                width: "50px",
+                height: "50px",
+                fontSize: "24px",
+                borderRadius: "50%",
+                border: "2px solid #333",
+                backgroundColor: "#fff",
+                cursor: "pointer",
+                fontWeight: "bold",
               }}
             >
               ←
             </button>
           </div>
 
-          <div style={{ gridColumn: '2' }}>
+          <div style={{ gridColumn: "2" }}>
             <button
-              onMouseDown={() => handleMoveStart('down')}
-              onMouseUp={() => handleMoveEnd('down')}
-              onTouchStart={() => handleMoveStart('down')}
-              onTouchEnd={() => handleMoveEnd('down')}
+              onMouseDown={() => handleMoveStart("down")}
+              onMouseUp={() => handleMoveEnd("down")}
+              onTouchStart={() => handleMoveStart("down")}
+              onTouchEnd={() => handleMoveEnd("down")}
               style={{
-                width: '50px',
-                height: '50px',
-                fontSize: '24px',
-                borderRadius: '50%',
-                border: '2px solid #333',
-                backgroundColor: '#fff',
-                cursor: 'pointer',
-                fontWeight: 'bold',
+                width: "50px",
+                height: "50px",
+                fontSize: "24px",
+                borderRadius: "50%",
+                border: "2px solid #333",
+                backgroundColor: "#fff",
+                cursor: "pointer",
+                fontWeight: "bold",
               }}
             >
               ↓
             </button>
           </div>
 
-          <div style={{ gridColumn: '3' }}>
+          <div style={{ gridColumn: "3" }}>
             <button
-              onMouseDown={() => handleMoveStart('right')}
-              onMouseUp={() => handleMoveEnd('right')}
-              onTouchStart={() => handleMoveStart('right')}
-              onTouchEnd={() => handleMoveEnd('right')}
+              onMouseDown={() => handleMoveStart("right")}
+              onMouseUp={() => handleMoveEnd("right")}
+              onTouchStart={() => handleMoveStart("right")}
+              onTouchEnd={() => handleMoveEnd("right")}
               style={{
-                width: '50px',
-                height: '50px',
-                fontSize: '24px',
-                borderRadius: '50%',
-                border: '2px solid #333',
-                backgroundColor: '#fff',
-                cursor: 'pointer',
-                fontWeight: 'bold',
+                width: "50px",
+                height: "50px",
+                fontSize: "24px",
+                borderRadius: "50%",
+                border: "2px solid #333",
+                backgroundColor: "#fff",
+                cursor: "pointer",
+                fontWeight: "bold",
               }}
             >
               →

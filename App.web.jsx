@@ -1,225 +1,431 @@
-import React, { useEffect, useState } from 'react';
-import './App.web.css';
-import Map3DSceneWeb from './components/Map3DScene.web.jsx';
-import { fetchMapData } from './services/osmService.js';
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import "./App.web.css";
+import Map3DSceneWeb from "./components/Map3DScene.web.jsx";
+import { createRealtimeMapLoader } from "./services/osmService.js";
+import { MAP_CONFIG } from "./config/mapConfig.js";
+import { calculateDistance } from "./utils/geoUtils.js";
+
+const DEFAULT_LOCATION = {
+  latitude: -25.4957255,
+  longitude: -49.1658802,
+  altitude: 0,
+  accuracy: 5,
+};
+const OBSERVER_LOCATION_STORAGE_KEY = "observerLocation";
+const DEVICE_LOCATION_STORAGE_KEY = "deviceLocation";
+
+function normalizeLocation(loc) {
+  return {
+    latitude: Number(loc?.latitude) || DEFAULT_LOCATION.latitude,
+    longitude: Number(loc?.longitude) || DEFAULT_LOCATION.longitude,
+    altitude: Number(loc?.altitude) || 0,
+    accuracy: Number(loc?.accuracy) || 5,
+  };
+}
+
+function applyMetersToLocation(baseLocation, deltaXMeters, deltaZMeters) {
+  const lat = baseLocation.latitude;
+  const safeCos = Math.max(0.00001, Math.cos((lat * Math.PI) / 180));
+  const metersPerDegreeLat = 111320;
+  const metersPerDegreeLon = 111320 * safeCos;
+
+  return {
+    ...baseLocation,
+    latitude: lat + deltaZMeters / metersPerDegreeLat,
+    longitude: baseLocation.longitude + deltaXMeters / metersPerDegreeLon,
+  };
+}
 
 export default function AppWeb() {
   const [location, setLocation] = useState(null);
+  const [renderAnchor, setRenderAnchor] = useState(null);
   const [mapData, setMapData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [mapError, setMapError] = useState(false);
-  const [coordInput, setCoordInput] = useState('');
+  const [coordInput, setCoordInput] = useState("");
   const [inputError, setInputError] = useState(null);
   const [locationEnabled, setLocationEnabled] = useState(false);
-  const [watchId, setWatchId] = useState(null);
+  const [mapStats, setMapStats] = useState(null);
 
-  // Função para carregar localização do localStorage
+  const watchIdRef = useRef(null);
+  const deviceLocationRef = useRef(null);
+  const loaderRef = useRef(null);
+  const lastEnsureRef = useRef({
+    latitude: Number.NaN,
+    longitude: Number.NaN,
+    time: 0,
+  });
+  const updateTokenRef = useRef(0);
+  const skipNextDebouncedRefreshRef = useRef(false);
+
   const loadStoredLocation = () => {
-    const stored = localStorage.getItem('deviceLocation');
-    if (stored) {
+    const stored = localStorage.getItem(OBSERVER_LOCATION_STORAGE_KEY);
+    if (!stored) {
+      // Compatibilidade com versão antiga que usava só "deviceLocation".
+      const legacyStored = localStorage.getItem(DEVICE_LOCATION_STORAGE_KEY);
+      if (!legacyStored) return null;
       try {
-        return JSON.parse(stored);
-      } catch (e) {
-        console.error('Erro ao ler localização do localStorage:', e);
+        return normalizeLocation(JSON.parse(legacyStored));
+      } catch (readError) {
+        console.error(
+          "Erro ao ler localização legada do localStorage:",
+          readError,
+        );
+        return null;
       }
     }
-    return null;
-  };
-
-  // Função para salvar localização no localStorage
-  const saveLocationToStorage = (loc) => {
     try {
-      localStorage.setItem('deviceLocation', JSON.stringify(loc));
-    } catch (e) {
-      console.error('Erro ao salvar localização no localStorage:', e);
+      return normalizeLocation(JSON.parse(stored));
+    } catch (readError) {
+      console.error("Erro ao ler localização do observador:", readError);
+      return null;
     }
   };
 
-  // Função para inicializar geolocation
-  const initializeGeolocation = (callback) => {
+  const saveLocationToStorage = (loc) => {
+    try {
+      localStorage.setItem(
+        OBSERVER_LOCATION_STORAGE_KEY,
+        JSON.stringify(normalizeLocation(loc)),
+      );
+    } catch (writeError) {
+      console.error("Erro ao salvar localização do observador:", writeError);
+    }
+  };
+
+  const loadStoredDeviceLocation = () => {
+    const stored = localStorage.getItem(DEVICE_LOCATION_STORAGE_KEY);
+    if (!stored) return null;
+    try {
+      return normalizeLocation(JSON.parse(stored));
+    } catch (readError) {
+      console.error("Erro ao ler localização do dispositivo:", readError);
+      return null;
+    }
+  };
+
+  const saveDeviceLocationToStorage = (loc) => {
+    try {
+      localStorage.setItem(
+        DEVICE_LOCATION_STORAGE_KEY,
+        JSON.stringify(normalizeLocation(loc)),
+      );
+    } catch (writeError) {
+      console.error("Erro ao salvar localização do dispositivo:", writeError);
+    }
+  };
+
+  const ensureRealtimeLoader = useCallback(() => {
+    if (!loaderRef.current) {
+      loaderRef.current = createRealtimeMapLoader({
+        tileSizeMeters: MAP_CONFIG.TILE_SIZE_METERS,
+        activeRadiusMeters: MAP_CONFIG.ACTIVE_RADIUS_METERS,
+        maxCachedTiles: MAP_CONFIG.MAX_CACHED_TILES,
+        maxConcurrentFetches: MAP_CONFIG.MAX_CONCURRENT_TILE_FETCHES,
+      });
+    }
+    return loaderRef.current;
+  }, []);
+
+  const refreshMapForLocation = useCallback(
+    async (loc, { forceEnsure = false } = {}) => {
+      const normalized = normalizeLocation(loc);
+      const loader = ensureRealtimeLoader();
+      const now = Date.now();
+      const previousEnsure = lastEnsureRef.current;
+
+      const movedMeters = Number.isFinite(previousEnsure.latitude)
+        ? calculateDistance(
+            previousEnsure.latitude,
+            previousEnsure.longitude,
+            normalized.latitude,
+            normalized.longitude,
+          ) * 1000
+        : Number.POSITIVE_INFINITY;
+
+      const shouldEnsureArea =
+        forceEnsure ||
+        movedMeters >= MAP_CONFIG.UPDATE_DISTANCE_INTERVAL ||
+        now - previousEnsure.time >= MAP_CONFIG.UPDATE_TIME_INTERVAL;
+
+      if (shouldEnsureArea) {
+        const requestToken = ++updateTokenRef.current;
+        await loader.ensureActiveArea(
+          normalized.latitude,
+          normalized.longitude,
+          {
+            blockingTileCount: MAP_CONFIG.BLOCKING_TILE_COUNT,
+            onBackgroundLoaded: () => {
+              if (requestToken !== updateTokenRef.current) return;
+              const bgMapData = loader.getActiveMapData(
+                normalized.latitude,
+                normalized.longitude,
+              );
+              setMapData(bgMapData);
+              setMapStats(bgMapData.meta || loader.getStats());
+            },
+          },
+        );
+        if (requestToken !== updateTokenRef.current) return;
+
+        const nextMapData = loader.getActiveMapData(
+          normalized.latitude,
+          normalized.longitude,
+        );
+
+        setRenderAnchor(normalized);
+        setMapData(nextMapData);
+        setMapStats(nextMapData.meta || loader.getStats());
+        setMapError(false);
+
+        lastEnsureRef.current = {
+          latitude: normalized.latitude,
+          longitude: normalized.longitude,
+          time: now,
+        };
+        return;
+      }
+
+      setMapStats(loader.getStats());
+    },
+    [ensureRealtimeLoader],
+  );
+
+  const jumpToLocation = useCallback(
+    async (nextLocation) => {
+      const normalized = normalizeLocation(nextLocation);
+      skipNextDebouncedRefreshRef.current = true;
+
+      setLocation(normalized);
+      saveLocationToStorage(normalized);
+
+      setLoading(true);
+      try {
+        await refreshMapForLocation(normalized, { forceEnsure: true });
+        setMapError(false);
+      } catch (refreshError) {
+        console.error(
+          "Erro ao carregar mapa para nova localização:",
+          refreshError,
+        );
+        setMapError(true);
+        setInputError("Falha ao carregar mapa");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [refreshMapForLocation],
+  );
+
+  const initializeGeolocation = useCallback(() => {
     if (!navigator.geolocation) {
-      console.warn('Geolocation não suportada');
+      console.warn("Geolocation não suportada");
       return;
     }
 
     setLocationEnabled(true);
 
-    // Tentar pegar localização atual primeiro
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        const loc = {
+        const loc = normalizeLocation({
           latitude: position.coords.latitude,
           longitude: position.coords.longitude,
           altitude: position.coords.altitude || 0,
           accuracy: position.coords.accuracy,
-        };
-        saveLocationToStorage(loc);
-        if (callback) callback(loc);
+        });
+        deviceLocationRef.current = loc;
+        saveDeviceLocationToStorage(loc);
       },
-      (err) => {
-        console.warn('Erro ao obter localização atual:', err.message);
-        // Se falhar, usar localização armazenada ou padrão
-        const stored = loadStoredLocation();
-        if (stored && callback) {
-          callback(stored);
-        }
+      (geoError) => {
+        console.warn("Erro ao obter localização atual:", geoError.message);
+        const stored = loadStoredDeviceLocation();
+        if (!stored) return;
+        deviceLocationRef.current = stored;
       },
       {
         enableHighAccuracy: true,
         timeout: 10000,
         maximumAge: 0,
-      }
+      },
     );
 
-    // Depois, monitorar mudanças de localização
-    const id = navigator.geolocation.watchPosition(
+    watchIdRef.current = navigator.geolocation.watchPosition(
       (position) => {
-        const loc = {
+        const loc = normalizeLocation({
           latitude: position.coords.latitude,
           longitude: position.coords.longitude,
           altitude: position.coords.altitude || 0,
           accuracy: position.coords.accuracy,
-        };
-        saveLocationToStorage(loc);
-        setLocation(loc);
+        });
+        deviceLocationRef.current = loc;
+        saveDeviceLocationToStorage(loc);
       },
-      (err) => {
-        console.warn('Erro ao monitorar localização:', err.message);
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 0,
-      }
-    );
-
-    setWatchId(id);
-  };
-
-  // Função para centralizar na localização do dispositivo
-  const handleCenterOnDevice = () => {
-    if (!navigator.geolocation) {
-      setInputError('Geolocalização não suportada');
-      return;
-    }
-
-    setInputError(null);
-    navigator.geolocation.getCurrentPosition(
-      async (position) => {
-        const lat = position.coords.latitude;
-        const lon = position.coords.longitude;
-        const loc = { latitude: lat, longitude: lon, altitude: 0, accuracy: 5 };
-
-        try {
-          setLoading(true);
-          setLocation(loc);
-          saveLocationToStorage(loc);
-          const data = await fetchMapData(lat, lon, 0.5);
-          setMapData(data);
-          setMapError(false);
-        } catch (err) {
-          console.error('Erro ao carregar mapa para localização do dispositivo:', err);
-          setMapError(true);
-          setInputError('Falha ao carregar mapa');
-        } finally {
-          setLoading(false);
-        }
-      },
-      (err) => {
-        console.error('Erro ao obter localização do dispositivo:', err);
-        setInputError('Não foi possível obter a localização. Verifique as permissões.');
+      (geoError) => {
+        console.warn("Erro ao monitorar localização:", geoError.message);
       },
       {
         enableHighAccuracy: true,
         timeout: 10000,
         maximumAge: 0,
-      }
+      },
     );
-  };
+  }, []);
 
   useEffect(() => {
+    let mounted = true;
+
     (async () => {
       try {
-        // Tentar carregr localização armazenada primeiro
-        let initialLoc = loadStoredLocation();
-
-        // Se não houver localização armazenada, usar padrão
-        if (!initialLoc) {
-          initialLoc = {
-            latitude: -25.4957255,
-            longitude: -49.1658802,
-            altitude: 0,
-            accuracy: 5,
-          };
+        const storedDevice = loadStoredDeviceLocation();
+        if (storedDevice) {
+          deviceLocationRef.current = storedDevice;
         }
+        const initialLocation = loadStoredLocation() || DEFAULT_LOCATION;
+        const normalized = normalizeLocation(initialLocation);
 
-        setLocation(initialLoc);
+        setLocation(normalized);
         setLoading(true);
 
-        try {
-          const data = await fetchMapData(initialLoc.latitude, initialLoc.longitude, 0.5);
-          setMapData(data);
-          setMapError(false);
-        } catch (err) {
-          console.error('Web map load error:', err);
-          setMapError(true);
-        }
+        await refreshMapForLocation(normalized, { forceEnsure: true });
 
+        if (!mounted) return;
         setLoading(false);
-
-        // Inicializar geolocation após carregar o mapa
-        initializeGeolocation((newLoc) => {
-          setLocation(newLoc);
-        });
-      } catch (err) {
-        console.error('Location error:', err);
-        setError('Erro ao inicializar: ' + err.message);
+        initializeGeolocation();
+      } catch (initError) {
+        console.error("Location error:", initError);
+        if (!mounted) return;
+        setError(
+          "Erro ao inicializar: " + (initError?.message || String(initError)),
+        );
         setLoading(false);
       }
     })();
 
-    // Cleanup
     return () => {
-      if (watchId !== null) {
-        navigator.geolocation.clearWatch(watchId);
+      mounted = false;
+      updateTokenRef.current += 1;
+      if (watchIdRef.current !== null && navigator.geolocation) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+      }
+      if (loaderRef.current) {
+        loaderRef.current.clear();
       }
     };
+  }, [initializeGeolocation, refreshMapForLocation]);
+
+  useEffect(() => {
+    if (!location || loading) return;
+
+    if (skipNextDebouncedRefreshRef.current) {
+      skipNextDebouncedRefreshRef.current = false;
+      return;
+    }
+
+    const timeoutId = setTimeout(() => {
+      refreshMapForLocation(location).catch((refreshError) => {
+        console.error(
+          "Erro na atualização do mapa em tempo real:",
+          refreshError,
+        );
+        setMapError(true);
+      });
+    }, MAP_CONFIG.REALTIME_REFRESH_DEBOUNCE_MS);
+
+    return () => clearTimeout(timeoutId);
+  }, [location, loading, refreshMapForLocation]);
+
+  useEffect(() => {
+    if (!location) return;
+    const persistTimeout = setTimeout(() => {
+      saveLocationToStorage(location);
+    }, 1500);
+    return () => clearTimeout(persistTimeout);
+  }, [location]);
+
+  const handleObserverMove = useCallback((deltaXMeters, deltaZMeters) => {
+    if (!Number.isFinite(deltaXMeters) || !Number.isFinite(deltaZMeters))
+      return;
+    if (deltaXMeters === 0 && deltaZMeters === 0) return;
+
+    setLocation((previousLocation) => {
+      if (!previousLocation) return previousLocation;
+      const next = applyMetersToLocation(
+        previousLocation,
+        deltaXMeters,
+        deltaZMeters,
+      );
+      return next;
+    });
   }, []);
+
+  const handleCenterOnDevice = () => {
+    if (!navigator.geolocation) {
+      setInputError("Geolocalização não suportada");
+      return;
+    }
+
+    setInputError(null);
+
+    if (deviceLocationRef.current) {
+      jumpToLocation(deviceLocationRef.current);
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const loc = normalizeLocation({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          altitude: position.coords.altitude || 0,
+          accuracy: position.coords.accuracy,
+        });
+        deviceLocationRef.current = loc;
+        saveDeviceLocationToStorage(loc);
+        await jumpToLocation(loc);
+      },
+      (geoError) => {
+        console.error("Erro ao obter localização do dispositivo:", geoError);
+        setInputError(
+          "Não foi possível obter a localização. Verifique as permissões.",
+        );
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0,
+      },
+    );
+  };
 
   const handleGoToCoordinates = async () => {
     setInputError(null);
     if (!coordInput) return;
-    // aceitar formatos: "lat,lon" ou "lon,lat" — assumimos "lat,lon"
-    const parts = coordInput.split(',').map(p => p.trim()).filter(Boolean);
+
+    const parts = coordInput
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean);
+
     if (parts.length !== 2) {
-      setInputError('Informe em: latitude, longitude');
+      setInputError("Informe em: latitude, longitude");
       return;
     }
 
-    const lat = parseFloat(parts[0].replace(/\s+/g, ''));
-    const lon = parseFloat(parts[1].replace(/\s+/g, ''));
+    const lat = parseFloat(parts[0].replace(/\s+/g, ""));
+    const lon = parseFloat(parts[1].replace(/\s+/g, ""));
 
     if (Number.isNaN(lat) || Number.isNaN(lon)) {
-      setInputError('Coordenadas inválidas');
+      setInputError("Coordenadas inválidas");
       return;
     }
 
-    const newLoc = { latitude: lat, longitude: lon, altitude: 0, accuracy: 5 };
-    try {
-      setLoading(true);
-      setLocation(newLoc);
-      saveLocationToStorage(newLoc);
-      const data = await fetchMapData(lat, lon, 0.5);
-      setMapData(data);
-      setMapError(false);
-    } catch (err) {
-      console.error('Erro ao carregar mapa para coordenadas:', err);
-      setMapError(true);
-      setInputError('Falha ao carregar mapa');
-    } finally {
-      setLoading(false);
-    }
+    await jumpToLocation({
+      latitude: lat,
+      longitude: lon,
+      altitude: 0,
+      accuracy: 5,
+    });
   };
 
   return (
@@ -232,28 +438,45 @@ export default function AppWeb() {
                 aria-label="Coordenadas"
                 placeholder="latitude, longitude"
                 value={coordInput}
-                onChange={(e) => setCoordInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleGoToCoordinates(); }}
+                onChange={(event) => setCoordInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") handleGoToCoordinates();
+                }}
               />
               <button onClick={handleGoToCoordinates}>Ir</button>
               {locationEnabled && (
-                <button onClick={handleCenterOnDevice} title="Centralizar na localização do dispositivo">
+                <button
+                  onClick={handleCenterOnDevice}
+                  title="Centralizar na localização do dispositivo"
+                >
                   📍
                 </button>
               )}
               {inputError && <div className="coord-error">{inputError}</div>}
             </div>
-            <Map3DSceneWeb mapData={mapData} zoom={60} location={location} onLocationChange={setLocation} />
+            <Map3DSceneWeb
+              mapData={mapData}
+              zoom={60}
+              location={location}
+              renderAnchor={renderAnchor}
+              onObserverMove={handleObserverMove}
+            />
           </div>
           <div className="status-bar">
             <div className="status-text">
-              📍 Lat: {location.latitude.toFixed(6)} | Lon: {location.longitude.toFixed(6)}
+              📍 Lat: {location.latitude.toFixed(6)} | Lon:{" "}
+              {location.longitude.toFixed(6)}
             </div>
             <div className="status-text">
-              🏗️ Prédios: {mapData?.buildings?.length || 0} | 🛣️ Ruas: {mapData?.roads?.length || 0}
+              🏗️ Prédios: {mapData?.buildings?.length || 0} | 🛣️ Ruas:{" "}
+              {mapData?.roads?.length || 0}
             </div>
             <div className="status-text">
-              💡 Dica: Arraste para rotacionar, role para zoom
+              🧩 Tiles ativos: {mapStats?.loadedTiles || 0}/
+              {mapStats?.activeTiles || 0} | Cache: {mapStats?.cachedTiles || 0}
+            </div>
+            <div className="status-text">
+              💡 Dica: WASD/móvel move o observador, arraste para rotacionar
             </div>
           </div>
         </>
@@ -261,11 +484,13 @@ export default function AppWeb() {
         <div className="loading-container">
           <div className="spinner"></div>
           <p className="loading-text">
-            {error || (mapError ? 'Erro ao carregar mapa' : 'Carregando mapa 3D...')}
+            {error ||
+              (mapError ? "Erro ao carregar mapa" : "Carregando mapa 3D...")}
           </p>
           {location && (
             <p className="loading-text">
-              Lat: {location.latitude.toFixed(6)} | Lon: {location.longitude.toFixed(6)}
+              Lat: {location.latitude.toFixed(6)} | Lon:{" "}
+              {location.longitude.toFixed(6)}
             </p>
           )}
         </div>

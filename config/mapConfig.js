@@ -5,11 +5,26 @@ export const MAP_CONFIG = {
   // Raio de busca do mapa em km
   SEARCH_RADIUS_KM: 3,
 
+  // Carregamento em tempo real
+  ACTIVE_RADIUS_METERS: 450,
+  TILE_SIZE_METERS: 450,
+  MAX_CACHED_TILES: 48,
+  MAX_CONCURRENT_TILE_FETCHES: 2,
+  BLOCKING_TILE_COUNT: 2,
+  REALTIME_REFRESH_DEBOUNCE_MS: 300,
+  ENABLE_AMENITIES: false,
+  ROAD_SIMPLIFY_TOLERANCE_METERS: 2.5,
+
   // Distância mínima em metros para atualizar o mapa
-  UPDATE_DISTANCE_INTERVAL: 10,
+  UPDATE_DISTANCE_INTERVAL: 150,
 
   // Intervalo de tempo mínimo entre atualizações (em ms)
-  UPDATE_TIME_INTERVAL: 1000,
+  UPDATE_TIME_INTERVAL: 4000,
+
+  // Movimento do observador (m/s)
+  MOVEMENT_SPEED_MPS: 20,
+  MOVEMENT_UPDATE_INTERVAL_MS: 120,
+  MIN_MOVEMENT_UPDATE_METERS: 0.8,
 
   // Zoom inicial da câmera
   INITIAL_ZOOM: 80,
