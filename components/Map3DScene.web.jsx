@@ -446,7 +446,7 @@ function SceneContent({
     const keys = keysPressed.current;
     const mobile = moveRef?.current || {};
     const inputX =
-      (keys["d"] || mobile.right ? 1 : 0) - (keys["a"] || mobile.left ? 1 : 0);
+      (keys["a"] || mobile.left ? 1 : 0) - (keys["d"] || mobile.right ? 1 : 0);
     const inputZ =
       (keys["w"] || mobile.up ? 1 : 0) - (keys["s"] || mobile.down ? 1 : 0);
 

@@ -92,14 +92,14 @@ export const MAP_CONFIG = {
 
   // Tipos de ruas e suas larguras
   ROAD_WIDTHS: {
-    motorway: 8,
-    trunk: 7,
-    primary: 6,
-    secondary: 5,
-    tertiary: 4,
-    residential: 2.5,
-    service: 1.5,
-    footway: 0.5,
+    motorway: 9,
+    trunk: 8,
+    primary: 7.5,
+    secondary: 7,
+    tertiary: 6.5,
+    residential: 4.5,
+    service: 2.5,
+    footway: 1.5,
   },
 
   // Cores de prédios por tipo
