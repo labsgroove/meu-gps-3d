@@ -156,6 +156,33 @@ export default function AppWeb() {
           normalized.longitude,
           {
             blockingTileCount: MAP_CONFIG.BLOCKING_TILE_COUNT,
+            onTileReady: (tileData) => {
+              // Renderização incremental: adicionar objetos conforme tiles carregam
+              if (requestToken !== updateTokenRef.current) return;
+              setMapData((prevData) => {
+                if (!prevData) return null;
+                // Criar set de IDs já renderizados para evitar duplicatas
+                const existingBuildingIds = new Set(prevData.buildings?.map(b => b.id) || []);
+                const existingRoadIds = new Set(prevData.roads?.map(r => r.id) || []);
+                const existingAmenityIds = new Set(prevData.amenities?.map(a => a.id) || []);
+
+                return {
+                  ...prevData,
+                  buildings: [
+                    ...prevData.buildings,
+                    ...tileData.buildings.filter(b => !existingBuildingIds.has(b.id)),
+                  ],
+                  roads: [
+                    ...prevData.roads,
+                    ...tileData.roads.filter(r => !existingRoadIds.has(r.id)),
+                  ],
+                  amenities: [
+                    ...prevData.amenities,
+                    ...tileData.amenities.filter(a => !existingAmenityIds.has(a.id)),
+                  ],
+                };
+              });
+            },
             onBackgroundLoaded: () => {
               if (requestToken !== updateTokenRef.current) return;
               const bgMapData = loader.getActiveMapData(

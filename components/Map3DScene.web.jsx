@@ -398,6 +398,12 @@ function SceneContent({
     elapsedMs: 0,
   });
 
+  // Estado para frustum culling
+  const [visibleBuildingIds, setVisibleBuildingIds] = useState(new Set());
+  const [visibleRoadIds, setVisibleRoadIds] = useState(new Set());
+  const [visibleAmenityIds, setVisibleAmenityIds] = useState(new Set());
+  const frustumRef = useRef(new THREE.Frustum());
+
   // Controlar movimento com WASD
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -441,6 +447,73 @@ function SceneContent({
         // Não sobrescrever camera.position durante a interação — o OrbitControls gerencia órbita/zoom
         controlsRef.current.update();
       }
+    }
+
+    // Frustum Culling: Calcular frustum da câmera
+    const projMatrix = new THREE.Matrix4();
+    projMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    frustumRef.current.setFromProjectionMatrix(projMatrix);
+
+    // Determinar quais objetos estão no frustum
+    if (mapData) {
+      const visibleBuildings = new Set();
+      const visibleRoads = new Set();
+      const visibleAmenities = new Set();
+
+      // Verificar buildings
+      mapData.buildings?.forEach((building) => {
+        if (building.points && building.points.length >= 3) {
+          const mappedPoints = building.points.map((p) => mapToSceneCoord(p));
+          const centerX = mappedPoints.reduce((sum, p) => sum + p[0], 0) / mappedPoints.length;
+          const centerY = mappedPoints.reduce((sum, p) => sum + p[1], 0) / mappedPoints.length;
+          const buildingSphere = new THREE.Sphere(
+            new THREE.Vector3(centerX, (building.height || 10) / 2, centerY),
+            Math.max(...mappedPoints.map((p) => Math.sqrt((p[0] - centerX) ** 2 + (p[1] - centerY) ** 2))) + 5,
+          );
+          if (frustumRef.current.intersectsSphere(buildingSphere)) {
+            visibleBuildings.add(building.id);
+          }
+        }
+      });
+
+      // Verificar roads
+      mapData.roads?.forEach((road) => {
+        if (road.points && road.points.length >= 2) {
+          const pts = road.points.map((p) => mapToSceneCoord(p));
+          let minX = Math.min(...pts.map((p) => p[0]));
+          let maxX = Math.max(...pts.map((p) => p[0]));
+          let minZ = Math.min(...pts.map((p) => p[1]));
+          let maxZ = Math.max(...pts.map((p) => p[1]));
+          const centerX = (minX + maxX) / 2;
+          const centerZ = (minZ + maxZ) / 2;
+          const radius = Math.sqrt((maxX - minX) ** 2 + (maxZ - minZ) ** 2) / 2 + 10;
+          const roadSphere = new THREE.Sphere(
+            new THREE.Vector3(centerX, 0.2, centerZ),
+            radius,
+          );
+          if (frustumRef.current.intersectsSphere(roadSphere)) {
+            visibleRoads.add(road.id);
+          }
+        }
+      });
+
+      // Verificar amenities
+      mapData.amenities?.forEach((amenity) => {
+        if (amenity.position) {
+          const pos = mapToSceneCoord(amenity.position);
+          const amenitySphere = new THREE.Sphere(
+            new THREE.Vector3(pos[0], amenity.position[2] || 1, pos[1]),
+            2,
+          );
+          if (frustumRef.current.intersectsSphere(amenitySphere)) {
+            visibleAmenities.add(amenity.id);
+          }
+        }
+      });
+
+      setVisibleBuildingIds(visibleBuildings);
+      setVisibleRoadIds(visibleRoads);
+      setVisibleAmenityIds(visibleAmenities);
     }
 
     const keys = keysPressed.current;
@@ -503,6 +576,11 @@ function SceneContent({
     Math.max(-maxShift, Math.min(maxShift, -deltaScene[1])),
   ];
 
+  // Filtrar apenas objetos visíveis
+  const visibleBuildings = buildings.filter((b) => visibleBuildingIds.has(b.id));
+  const visibleRoads = roads.filter((r) => visibleRoadIds.has(r.id));
+  const visibleAmenities = amenities.filter((a) => visibleAmenityIds.has(a.id));
+
   return (
     <>
       <ambientLight intensity={1} />
@@ -515,11 +593,11 @@ function SceneContent({
           <meshBasicMaterial color={0x8fbf6f} />
         </mesh>
 
-        {roads.map((road) => (
+        {visibleRoads.map((road) => (
           <Road key={`r-${road.id}`} road={road} />
         ))}
 
-        {buildings.map((building) => (
+        {visibleBuildings.map((building) => (
           <Building
             key={`b-${building.id}`}
             building={building}
@@ -527,7 +605,7 @@ function SceneContent({
           />
         ))}
 
-        {amenities.map((amenity) => (
+        {visibleAmenities.map((amenity) => (
           <Amenity key={`a-${amenity.id}`} amenity={amenity} />
         ))}
       </group>

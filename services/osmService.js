@@ -543,7 +543,25 @@ export function createRealtimeMapLoader(options = {}) {
         ? options.onBackgroundLoaded
         : null;
 
+    const onTileReady =
+      typeof options.onTileReady === "function" ? options.onTileReady : null;
+
+    // Renderização incremental: chamar callback para cada tile que fica pronto
     if (backgroundTiles.length > 0) {
+      backgroundTiles.forEach((tile) => {
+        loadTile(tile.tileX, tile.tileY)
+          .then((entry) => {
+            if (onTileReady && entry.status === "ready") {
+              const transformed = transformToObserverFrame(entry.data, observerWorld);
+              onTileReady(transformed);
+            }
+          })
+          .catch(() => {
+            // Erro ao carregar tile, continuar sem fazer nada
+          });
+      });
+
+      // Aguardar que todos os tiles de fundo carreguem
       Promise.all(
         backgroundTiles.map((tile) => loadTile(tile.tileX, tile.tileY)),
       )
