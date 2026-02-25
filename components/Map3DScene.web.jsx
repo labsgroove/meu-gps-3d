@@ -112,7 +112,8 @@ const Building = memo(function Building({ building, roads }) {
       building.points,
       roads,
     );
-    if (MIRROR_X) rotation = -rotation;
+    // NOTA: calculatePerpendiculalOrientation já aplica mapToSceneCoord aos pontos,
+    // então a rotação já está corrigida para o espaço transformado. Não negar novamente!
 
     // Criar shape em coordenadas locais (centralizadas no centroide, em sistema de cena)
     const localPoints = mappedPoints.map((p) => [
