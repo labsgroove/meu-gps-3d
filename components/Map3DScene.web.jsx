@@ -7,6 +7,10 @@ import { MAP_CONFIG, MATERIALS } from "../config/mapConfig.js";
 // Se o mapa estiver espelhado no seu input, ative esse flag para inverter X
 const MIRROR_X = true;
 
+// Estruturas acima de 5000 m² (ex: estádios, shoppings) não são rotacionadas
+// para se alinhar com ruas, pois precisam manter sua geometria interna consistente
+const LARGE_STRUCTURE_AREA_THRESHOLD = 5000;
+
 // Cache para orientações de prédios já calculadas
 const orientationCache = new Map();
 
@@ -56,6 +60,23 @@ function calculatePerpendiculalOrientation(buildingId, buildingPoints, roads) {
   const mapped = buildingPoints.map((p) => mapToSceneCoord(p));
   const centerX = mapped.reduce((sum, p) => sum + p[0], 0) / mapped.length;
   const centerY = mapped.reduce((sum, p) => sum + p[1], 0) / mapped.length;
+
+  // Calcular área do polígono usando fórmula do shoelace
+  // Se a estrutura é muito grande (ex: estádio), não rotacionar
+  let area = 0;
+  for (let i = 0; i < mapped.length; i++) {
+    const j = (i + 1) % mapped.length;
+    area += mapped[i][0] * mapped[j][1];
+    area -= mapped[j][0] * mapped[i][1];
+  }
+  area = Math.abs(area) / 2;
+
+  // Se estrutura > threshold (ex: estádios, grandes complexos), não rotacionar
+  // Mantém o alinhamento geométrico natural da estrutura
+  if (area > LARGE_STRUCTURE_AREA_THRESHOLD) {
+    orientationCache.set(cacheKey, 0);
+    return 0;
+  }
 
   let closestRoadAngle = 0;
   let closestDistance = Infinity;
