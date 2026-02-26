@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# Script de inicialização rápida para Meu GPS 3D (Web)
+# Script de inicialização rápida para Mapas 3D (Web)
 
-echo "🚀 Iniciando Meu GPS 3D - Versão Web"
+echo "🚀 Iniciando Mapas 3D - Versão Web"
 echo ""
 echo "1️⃣  Instalando dependências..."
 npm install

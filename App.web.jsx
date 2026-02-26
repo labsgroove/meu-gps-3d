@@ -480,7 +480,7 @@ export default function AppWeb() {
           <div className="map-container">
             <div className="hud-layer">
               <div className="brand-row">
-                <div className="brand-pill">Meu GPS 3D</div>
+                <div className="brand-pill">Mapas 3D</div>
                 <div className="realtime-pill">
                   <span
                     className={`live-dot ${mapError ? "is-error" : "is-live"}`}

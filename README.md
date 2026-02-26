@@ -1,4 +1,4 @@
-# 🗺️ Meu GPS 3D - Web Edition
+# 🗺️ Mapas 3D - Web Edition
 
 Uma aplicação web moderna para visualizar mapas 3D de cidades usando dados reais do OpenStreetMap. Construída com **React**, **Vite**, **Three.js** e **React Three Fiber**.
 
