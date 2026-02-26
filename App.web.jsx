@@ -162,23 +162,33 @@ export default function AppWeb() {
               setMapData((prevData) => {
                 if (!prevData) return null;
                 // Criar set de IDs já renderizados para evitar duplicatas
-                const existingBuildingIds = new Set(prevData.buildings?.map(b => b.id) || []);
-                const existingRoadIds = new Set(prevData.roads?.map(r => r.id) || []);
-                const existingAmenityIds = new Set(prevData.amenities?.map(a => a.id) || []);
+                const existingBuildingIds = new Set(
+                  prevData.buildings?.map((b) => b.id) || [],
+                );
+                const existingRoadIds = new Set(
+                  prevData.roads?.map((r) => r.id) || [],
+                );
+                const existingAmenityIds = new Set(
+                  prevData.amenities?.map((a) => a.id) || [],
+                );
 
                 return {
                   ...prevData,
                   buildings: [
                     ...prevData.buildings,
-                    ...tileData.buildings.filter(b => !existingBuildingIds.has(b.id)),
+                    ...tileData.buildings.filter(
+                      (b) => !existingBuildingIds.has(b.id),
+                    ),
                   ],
                   roads: [
                     ...prevData.roads,
-                    ...tileData.roads.filter(r => !existingRoadIds.has(r.id)),
+                    ...tileData.roads.filter((r) => !existingRoadIds.has(r.id)),
                   ],
                   amenities: [
                     ...prevData.amenities,
-                    ...tileData.amenities.filter(a => !existingAmenityIds.has(a.id)),
+                    ...tileData.amenities.filter(
+                      (a) => !existingAmenityIds.has(a.id),
+                    ),
                   ],
                 };
               });
@@ -455,32 +465,69 @@ export default function AppWeb() {
     });
   };
 
+  const isReady = Boolean(mapData && location && !loading);
+  const canSubmitCoordinates = coordInput.trim().length > 0;
+  const loadingMessage =
+    error || (mapError ? "Erro ao carregar mapa" : "Carregando mapa 3D...");
+
   return (
     <div className="app-container">
-      {mapData && location && !loading ? (
+      <div className="bg-aurora bg-aurora-one" />
+      <div className="bg-aurora bg-aurora-two" />
+
+      {isReady ? (
         <>
           <div className="map-container">
-            <div className="coord-input">
-              <input
-                aria-label="Coordenadas"
-                placeholder="latitude, longitude"
-                value={coordInput}
-                onChange={(event) => setCoordInput(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") handleGoToCoordinates();
-                }}
-              />
-              <button onClick={handleGoToCoordinates}>Ir</button>
-              {locationEnabled && (
+            <div className="hud-layer">
+              <div className="brand-row">
+                <div className="brand-pill">Meu GPS 3D</div>
+                <div className="realtime-pill">
+                  <span
+                    className={`live-dot ${mapError ? "is-error" : "is-live"}`}
+                  />
+                  {mapError
+                    ? "Falha na sincronização"
+                    : "Atualização em tempo real"}
+                </div>
+              </div>
+
+              <div className="coord-input">
+                <input
+                  aria-label="Coordenadas"
+                  placeholder="latitude, longitude"
+                  value={coordInput}
+                  onChange={(event) => setCoordInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") handleGoToCoordinates();
+                  }}
+                />
                 <button
-                  onClick={handleCenterOnDevice}
-                  title="Centralizar na localização do dispositivo"
+                  type="button"
+                  className="primary-btn"
+                  onClick={handleGoToCoordinates}
+                  disabled={!canSubmitCoordinates}
                 >
-                  📍
+                  Ir
                 </button>
-              )}
+                {locationEnabled && (
+                  <button
+                    type="button"
+                    className="ghost-btn"
+                    onClick={handleCenterOnDevice}
+                    title="Centralizar na localização do dispositivo"
+                  >
+                    Minha posição
+                  </button>
+                )}
+              </div>
               {inputError && <div className="coord-error">{inputError}</div>}
             </div>
+
+            <div className="hint-pill">
+              WASD ou controle mobile para mover o observador. Arraste para
+              girar.
+            </div>
+
             <Map3DSceneWeb
               mapData={mapData}
               zoom={60}
@@ -490,32 +537,51 @@ export default function AppWeb() {
             />
           </div>
           <div className="status-bar">
-            <div className="status-text">
-              📍 Lat: {location.latitude.toFixed(6)} | Lon:{" "}
-              {location.longitude.toFixed(6)}
+            <div className="status-card">
+              <div className="status-title">Posição</div>
+              <div className="status-value">
+                {location.latitude.toFixed(6)}, {location.longitude.toFixed(6)}
+              </div>
+              <div className="status-meta">
+                Precisão aproximada: {Math.round(location.accuracy || 0)} m
+              </div>
             </div>
-            <div className="status-text">
-              🏗️ Prédios: {mapData?.buildings?.length || 0} | 🛣️ Ruas:{" "}
-              {mapData?.roads?.length || 0}
+            <div className="status-card">
+              <div className="status-title">Cena</div>
+              <div className="status-value">
+                {mapData?.buildings?.length || 0} prédios
+              </div>
+              <div className="status-meta">
+                {mapData?.roads?.length || 0} ruas
+              </div>
             </div>
-            <div className="status-text">
-              🧩 Tiles ativos: {mapStats?.loadedTiles || 0}/
-              {mapStats?.activeTiles || 0} | Cache: {mapStats?.cachedTiles || 0}
+            <div className="status-card">
+              <div className="status-title">Tiles</div>
+              <div className="status-value">
+                {mapStats?.loadedTiles || 0}/{mapStats?.activeTiles || 0} ativos
+              </div>
+              <div className="status-meta">
+                Cache: {mapStats?.cachedTiles || 0}
+              </div>
             </div>
-            <div className="status-text">
-              💡 Dica: WASD/móvel move o observador, arraste para rotacionar
+            <div className="status-card">
+              <div className="status-title">Estado</div>
+              <div className="status-value">
+                {mapError ? "Operando com falhas" : "Operação estável"}
+              </div>
+              <div className="status-meta">
+                Renderização incremental habilitada
+              </div>
             </div>
           </div>
         </>
       ) : (
         <div className="loading-container">
           <div className="spinner"></div>
-          <p className="loading-text">
-            {error ||
-              (mapError ? "Erro ao carregar mapa" : "Carregando mapa 3D...")}
-          </p>
+          <p className="loading-title">{loadingMessage}</p>
+          <p className="loading-text">Preparando dados e geometria da cena.</p>
           {location && (
-            <p className="loading-text">
+            <p className="loading-coord">
               Lat: {location.latitude.toFixed(6)} | Lon:{" "}
               {location.longitude.toFixed(6)}
             </p>

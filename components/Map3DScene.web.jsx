@@ -381,10 +381,12 @@ const LocationMarker = memo(function LocationMarker({ position }) {
 
   const meshRef = useRef();
 
-  useFrame(() => {
+  useFrame((state) => {
     if (meshRef.current) {
-      meshRef.current.rotation.x += 0.01;
-      meshRef.current.rotation.y += 0.01;
+      const pulse = 1 + Math.sin(state.clock.elapsedTime * 2.5) * 0.06;
+      meshRef.current.scale.setScalar(pulse);
+      meshRef.current.rotation.x += 0.006;
+      meshRef.current.rotation.y += 0.012;
     }
   });
 
@@ -395,7 +397,7 @@ const LocationMarker = memo(function LocationMarker({ position }) {
         color={0xff0000}
         metalness={0.5}
         roughness={0.3}
-        emissive={0x660000}
+        emissive={0x8a1200}
       />
     </mesh>
   );
@@ -473,7 +475,10 @@ function SceneContent({
 
     // Frustum Culling: Calcular frustum da câmera
     const projMatrix = new THREE.Matrix4();
-    projMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    projMatrix.multiplyMatrices(
+      camera.projectionMatrix,
+      camera.matrixWorldInverse,
+    );
     frustumRef.current.setFromProjectionMatrix(projMatrix);
 
     // Determinar quais objetos estão no frustum
@@ -486,11 +491,19 @@ function SceneContent({
       mapData.buildings?.forEach((building) => {
         if (building.points && building.points.length >= 3) {
           const mappedPoints = building.points.map((p) => mapToSceneCoord(p));
-          const centerX = mappedPoints.reduce((sum, p) => sum + p[0], 0) / mappedPoints.length;
-          const centerY = mappedPoints.reduce((sum, p) => sum + p[1], 0) / mappedPoints.length;
+          const centerX =
+            mappedPoints.reduce((sum, p) => sum + p[0], 0) /
+            mappedPoints.length;
+          const centerY =
+            mappedPoints.reduce((sum, p) => sum + p[1], 0) /
+            mappedPoints.length;
           const buildingSphere = new THREE.Sphere(
             new THREE.Vector3(centerX, (building.height || 10) / 2, centerY),
-            Math.max(...mappedPoints.map((p) => Math.sqrt((p[0] - centerX) ** 2 + (p[1] - centerY) ** 2))) + 5,
+            Math.max(
+              ...mappedPoints.map((p) =>
+                Math.sqrt((p[0] - centerX) ** 2 + (p[1] - centerY) ** 2),
+              ),
+            ) + 5,
           );
           if (frustumRef.current.intersectsSphere(buildingSphere)) {
             visibleBuildings.add(building.id);
@@ -508,7 +521,8 @@ function SceneContent({
           let maxZ = Math.max(...pts.map((p) => p[1]));
           const centerX = (minX + maxX) / 2;
           const centerZ = (minZ + maxZ) / 2;
-          const radius = Math.sqrt((maxX - minX) ** 2 + (maxZ - minZ) ** 2) / 2 + 10;
+          const radius =
+            Math.sqrt((maxX - minX) ** 2 + (maxZ - minZ) ** 2) / 2 + 10;
           const roadSphere = new THREE.Sphere(
             new THREE.Vector3(centerX, 0.2, centerZ),
             radius,
@@ -599,20 +613,32 @@ function SceneContent({
   ];
 
   // Filtrar apenas objetos visíveis
-  const visibleBuildings = buildings.filter((b) => visibleBuildingIds.has(b.id));
+  const visibleBuildings = buildings.filter((b) =>
+    visibleBuildingIds.has(b.id),
+  );
   const visibleRoads = roads.filter((r) => visibleRoadIds.has(r.id));
   const visibleAmenities = amenities.filter((a) => visibleAmenityIds.has(a.id));
 
   return (
     <>
-      <ambientLight intensity={1} />
+      <hemisphereLight
+        skyColor={0xd8ecff}
+        groundColor={0x48633a}
+        intensity={0.74}
+      />
+      <ambientLight intensity={0.3} />
+      <directionalLight
+        position={[120, 180, 80]}
+        intensity={0.85}
+        color={0xfff2d6}
+      />
 
       {/* Grupo que contém todo o mapa já relativo ao observador */}
       <group position={worldShift}>
         {/* Solo (ground) */}
         <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]}>
           <planeGeometry args={[2000, 2000]} />
-          <meshBasicMaterial color={0x8fbf6f} />
+          <meshStandardMaterial color={0x8ebe6c} roughness={1} metalness={0} />
         </mesh>
 
         {visibleRoads.map((road) => (
@@ -647,7 +673,7 @@ function SceneContent({
       />
 
       <LocationMarker position={pointPosition} />
-      <fog attach="fog" args={[0x87ceeb, 100, 2000]} />
+      <fog attach="fog" args={[0x9bd3f2, 90, 2200]} />
     </>
   );
 }
@@ -680,7 +706,7 @@ export default function Map3DSceneWeb({
   };
 
   return (
-    <div style={{ width: "100%", height: "100%", position: "relative" }}>
+    <div className="scene-wrapper">
       <Canvas
         camera={{
           position: [0, zoom, zoom],
@@ -695,7 +721,7 @@ export default function Map3DSceneWeb({
           pixelRatio: Math.min(window.devicePixelRatio, 2),
         }}
         dpr={[1, Math.min(window.devicePixelRatio, 2)]}
-        style={{ width: "100%", height: "100%" }}
+        className="map-canvas"
       >
         <SceneContent
           mapData={mapData}
@@ -708,97 +734,62 @@ export default function Map3DSceneWeb({
       </Canvas>
 
       {mobileControls && (
-        <div
-          style={{
-            position: "absolute",
-            bottom: "20px",
-            left: "50%",
-            transform: "translateX(-50%)",
-            display: "grid",
-            gridTemplateColumns: "repeat(3, 50px)",
-            gap: "5px",
-            zIndex: 100,
-          }}
-        >
-          <div style={{ gridColumn: "2" }}>
+        <div className="mobile-dpad">
+          <div className="dpad-up">
             <button
+              type="button"
+              className="dpad-btn"
               onMouseDown={() => handleMoveStart("up")}
               onMouseUp={() => handleMoveEnd("up")}
               onTouchStart={() => handleMoveStart("up")}
               onTouchEnd={() => handleMoveEnd("up")}
-              style={{
-                width: "50px",
-                height: "50px",
-                fontSize: "24px",
-                borderRadius: "50%",
-                border: "2px solid #333",
-                backgroundColor: "#fff",
-                cursor: "pointer",
-                fontWeight: "bold",
-              }}
+              onTouchCancel={() => handleMoveEnd("up")}
+              onMouseLeave={() => handleMoveEnd("up")}
             >
               ↑
             </button>
           </div>
 
-          <div style={{ gridColumn: "1" }}>
+          <div className="dpad-left">
             <button
+              type="button"
+              className="dpad-btn"
               onMouseDown={() => handleMoveStart("left")}
               onMouseUp={() => handleMoveEnd("left")}
               onTouchStart={() => handleMoveStart("left")}
               onTouchEnd={() => handleMoveEnd("left")}
-              style={{
-                width: "50px",
-                height: "50px",
-                fontSize: "24px",
-                borderRadius: "50%",
-                border: "2px solid #333",
-                backgroundColor: "#fff",
-                cursor: "pointer",
-                fontWeight: "bold",
-              }}
+              onTouchCancel={() => handleMoveEnd("left")}
+              onMouseLeave={() => handleMoveEnd("left")}
             >
               ←
             </button>
           </div>
 
-          <div style={{ gridColumn: "2" }}>
+          <div className="dpad-down">
             <button
+              type="button"
+              className="dpad-btn"
               onMouseDown={() => handleMoveStart("down")}
               onMouseUp={() => handleMoveEnd("down")}
               onTouchStart={() => handleMoveStart("down")}
               onTouchEnd={() => handleMoveEnd("down")}
-              style={{
-                width: "50px",
-                height: "50px",
-                fontSize: "24px",
-                borderRadius: "50%",
-                border: "2px solid #333",
-                backgroundColor: "#fff",
-                cursor: "pointer",
-                fontWeight: "bold",
-              }}
+              onTouchCancel={() => handleMoveEnd("down")}
+              onMouseLeave={() => handleMoveEnd("down")}
             >
               ↓
             </button>
           </div>
 
-          <div style={{ gridColumn: "3" }}>
+          <div className="dpad-right">
             <button
+              type="button"
+              className="dpad-btn"
               onMouseDown={() => handleMoveStart("right")}
               onMouseUp={() => handleMoveEnd("right")}
               onTouchStart={() => handleMoveStart("right")}
               onTouchEnd={() => handleMoveEnd("right")}
-              style={{
-                width: "50px",
-                height: "50px",
-                fontSize: "24px",
-                borderRadius: "50%",
-                border: "2px solid #333",
-                backgroundColor: "#fff",
-                cursor: "pointer",
-                fontWeight: "bold",
-              }}
+              onTouchCancel={() => handleMoveEnd("right")}
+              onMouseLeave={() => handleMoveEnd("right")}
             >
               →
             </button>
