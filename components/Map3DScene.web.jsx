@@ -10,6 +10,12 @@ const MIRROR_X = true;
 // Estruturas acima de 5000 m² (ex: estádios, shoppings) não são rotacionadas
 // para se alinhar com ruas, pois precisam manter sua geometria interna consistente
 const LARGE_STRUCTURE_AREA_THRESHOLD = 5000;
+const ROAD_ALIGNMENT_MAX_DISTANCE_METERS = 140;
+const MIN_ROAD_SEGMENT_LENGTH_METERS = 4;
+const MAX_ROTATION_CORRECTION_RAD = Math.PI / 2;
+const MIN_ROTATION_CORRECTION_RAD = (0.5 * Math.PI) / 180;
+const ALIGNMENT_ANGLE_PENALTY_SCALE_METERS = 18;
+const ENABLE_BUILDING_STREET_ALIGNMENT = false;
 
 // Cache para orientações de prédios já calculadas
 const orientationCache = new Map();
@@ -42,22 +48,100 @@ function locationDeltaMeters(currentLocation, anchorLocation) {
   return [deltaX, deltaZ];
 }
 
-// Função para calcular a orientação perpendicular às ruas próximas (com cache)
-function calculatePerpendiculalOrientation(buildingId, buildingPoints, roads) {
+function normalizeAngle(angle) {
+  let normalized = angle;
+  while (normalized <= -Math.PI) normalized += Math.PI * 2;
+  while (normalized > Math.PI) normalized -= Math.PI * 2;
+  return normalized;
+}
+
+function normalizePolygonPoints(points) {
+  if (!Array.isArray(points) || points.length < 3) return points || [];
+  const first = points[0];
+  const last = points[points.length - 1];
+  if (
+    first &&
+    last &&
+    Math.abs(first[0] - last[0]) < 0.001 &&
+    Math.abs(first[1] - last[1]) < 0.001
+  ) {
+    return points.slice(0, -1);
+  }
+  return points;
+}
+
+function getDominantAxisAngle(points) {
+  if (!points || points.length < 2) return 0;
+  let dominantAngle = 0;
+  let longestEdge = 0;
+
+  for (let i = 0; i < points.length; i++) {
+    const p1 = points[i];
+    const p2 = points[(i + 1) % points.length];
+    const dx = p2[0] - p1[0];
+    const dz = p2[1] - p1[1];
+    const length = Math.hypot(dx, dz);
+    if (length > longestEdge) {
+      longestEdge = length;
+      dominantAngle = Math.atan2(dz, dx);
+    }
+  }
+
+  return dominantAngle;
+}
+
+function pointToSegmentDistance(px, pz, ax, az, bx, bz) {
+  const vx = bx - ax;
+  const vz = bz - az;
+  const segmentLengthSquared = vx * vx + vz * vz;
+  if (segmentLengthSquared <= 0.000001) {
+    return Math.hypot(px - ax, pz - az);
+  }
+
+  const wx = px - ax;
+  const wz = pz - az;
+  const t = Math.max(
+    0,
+    Math.min(1, (wx * vx + wz * vz) / segmentLengthSquared),
+  );
+  const projX = ax + t * vx;
+  const projZ = az + t * vz;
+  return Math.hypot(px - projX, pz - projZ);
+}
+
+function alignAxisDirection(angle, referenceAxis) {
+  let aligned = angle;
+  if (Math.abs(normalizeAngle(aligned - referenceAxis)) > Math.PI / 2) {
+    aligned += Math.PI;
+  }
+  return aligned;
+}
+
+// Calcula rotação corretiva do prédio baseada na rua mais próxima (com cache).
+// A correção é limitada para manter a orientação original do footprint OSM.
+function calculateRoadAlignedRotation(buildingId, buildingPoints, roads) {
+  if (!roads || roads.length === 0) return 0;
+
+  // Inclui quantidade de ruas para evitar cache stale quando tiles carregam incrementalmente.
+  const roadsVersion = roads.length;
   const cacheKey =
     buildingId !== undefined && buildingId !== null
-      ? `b-${buildingId}`
-      : `${buildingPoints.map((p) => p.join(",")).join(";")}`;
+      ? `b-${buildingId}-r${roadsVersion}`
+      : `${buildingPoints.map((p) => p.join(",")).join(";")}-r${roadsVersion}`;
 
   if (orientationCache.has(cacheKey)) {
     return orientationCache.get(cacheKey);
   }
 
-  if (!roads || roads.length === 0) return 0;
-  if (roads.length > 240) return 0;
-
   // Calcular centroide do prédio (aplicando transformação de coordenadas)
-  const mapped = buildingPoints.map((p) => mapToSceneCoord(p));
+  const mapped = normalizePolygonPoints(
+    buildingPoints.map((p) => mapToSceneCoord(p)),
+  );
+  if (mapped.length < 3) {
+    orientationCache.set(cacheKey, 0);
+    return 0;
+  }
+
   const centerX = mapped.reduce((sum, p) => sum + p[0], 0) / mapped.length;
   const centerY = mapped.reduce((sum, p) => sum + p[1], 0) / mapped.length;
 
@@ -78,40 +162,96 @@ function calculatePerpendiculalOrientation(buildingId, buildingPoints, roads) {
     return 0;
   }
 
-  let closestRoadAngle = 0;
-  let closestDistance = Infinity;
+  const buildingAxis = getDominantAxisAngle(mapped);
+  if (!Number.isFinite(buildingAxis)) {
+    orientationCache.set(cacheKey, 0);
+    return 0;
+  }
 
-  // Encontrar a rua mais próxima
+  let bestRoadAngle = null;
+  let bestDistance = Infinity;
+  let bestScore = Infinity;
+
+  // Seleciona segmento pela melhor combinação de proximidade e coerência angular.
   roads.forEach((road) => {
     if (!road.points || road.points.length < 2) return;
 
-    // Usar os pontos da rua para calcular a direção
     for (let i = 0; i < road.points.length - 1; i++) {
       const p1 = road.points[i];
       const p2 = road.points[i + 1];
 
-      // Calcular direção da estrada (aplica transformação de coordenadas)
       const mp1 = mapToSceneCoord(p1);
       const mp2 = mapToSceneCoord(p2);
       const roadDx = mp2[0] - mp1[0];
       const roadDy = mp2[1] - mp1[1];
-      let roadAngle = Math.atan2(roadDy, roadDx);
+      const segmentLength = Math.hypot(roadDx, roadDy);
+      if (segmentLength < MIN_ROAD_SEGMENT_LENGTH_METERS) continue;
 
-      // Calcular distância do prédio ao ponto médio da rua (em coords de cena)
-      const midX = (mp1[0] + mp2[0]) / 2;
-      const midY = (mp1[1] + mp2[1]) / 2;
-      const distance = Math.sqrt((centerX - midX) ** 2 + (centerY - midY) ** 2);
+      const distance = pointToSegmentDistance(
+        centerX,
+        centerY,
+        mp1[0],
+        mp1[1],
+        mp2[0],
+        mp2[1],
+      );
+      if (distance > ROAD_ALIGNMENT_MAX_DISTANCE_METERS) continue;
 
-      if (distance < closestDistance) {
-        closestDistance = distance;
-        // Orientação perpendicular à rua.
-        closestRoadAngle = roadAngle - Math.PI / 2;
+      const roadAngle = Math.atan2(roadDy, roadDx);
+      const parallelTarget = alignAxisDirection(roadAngle, buildingAxis);
+      const perpendicularTarget = alignAxisDirection(
+        roadAngle + Math.PI / 2,
+        buildingAxis,
+      );
+      const parallelDelta = Math.abs(
+        normalizeAngle(parallelTarget - buildingAxis),
+      );
+      const perpendicularDelta = Math.abs(
+        normalizeAngle(perpendicularTarget - buildingAxis),
+      );
+      const angularMismatch = Math.min(parallelDelta, perpendicularDelta);
+      const score =
+        distance + angularMismatch * ALIGNMENT_ANGLE_PENALTY_SCALE_METERS;
+
+      if (score < bestScore) {
+        bestScore = score;
+        bestDistance = distance;
+        bestRoadAngle = roadAngle;
       }
     }
   });
 
-  orientationCache.set(cacheKey, closestRoadAngle);
-  return closestRoadAngle;
+  if (
+    !Number.isFinite(bestRoadAngle) ||
+    bestDistance > ROAD_ALIGNMENT_MAX_DISTANCE_METERS
+  ) {
+    orientationCache.set(cacheKey, 0);
+    return 0;
+  }
+
+  // Testa alinhar paralelo ou perpendicular à rua e escolhe o ajuste menor.
+  const parallelTarget = alignAxisDirection(bestRoadAngle, buildingAxis);
+  const perpendicularTarget = alignAxisDirection(
+    bestRoadAngle + Math.PI / 2,
+    buildingAxis,
+  );
+  const parallelDelta = normalizeAngle(parallelTarget - buildingAxis);
+  const perpendicularDelta = normalizeAngle(perpendicularTarget - buildingAxis);
+
+  let rotationDelta =
+    Math.abs(perpendicularDelta) < Math.abs(parallelDelta)
+      ? perpendicularDelta
+      : parallelDelta;
+
+  if (
+    Math.abs(rotationDelta) < MIN_ROTATION_CORRECTION_RAD ||
+    Math.abs(rotationDelta) > MAX_ROTATION_CORRECTION_RAD
+  ) {
+    rotationDelta = 0;
+  }
+
+  orientationCache.set(cacheKey, rotationDelta);
+  return rotationDelta;
 }
 
 // Componente para renderizar edifícios com orientação corrigida (memoizado)
@@ -121,25 +261,30 @@ const Building = memo(function Building({ building, roads }) {
   }
   try {
     // Calcular centroide no sistema de cena (aplica mapToSceneCoord)
-    const mappedPoints = building.points.map((p) => mapToSceneCoord(p));
+    const mappedPoints = normalizePolygonPoints(
+      building.points.map((p) => mapToSceneCoord(p)),
+    );
+    if (mappedPoints.length < 3) {
+      return null;
+    }
+
     const centerX =
       mappedPoints.reduce((sum, p) => sum + p[0], 0) / mappedPoints.length;
     const centerY =
       mappedPoints.reduce((sum, p) => sum + p[1], 0) / mappedPoints.length;
 
-    // Calcular orientação perpendicular às ruas (calculatePerpendiculalOrientation aplica mapeamento internamente)
-    let rotation = calculatePerpendiculalOrientation(
-      building.id,
-      building.points,
-      roads,
-    );
-    // NOTA: calculatePerpendiculalOrientation já aplica mapToSceneCoord aos pontos,
-    // então a rotação já está corrigida para o espaço transformado. Não negar novamente!
+    // Footprints de prédio do OSM já estão georreferenciados e orientados.
+    // Rotação extra tende a desalinhar. Mantemos orientação original.
+    const rotation = ENABLE_BUILDING_STREET_ALIGNMENT
+      ? calculateRoadAlignedRotation(building.id, building.points, roads)
+      : 0;
 
     // Criar shape em coordenadas locais (centralizadas no centroide, em sistema de cena)
+    // O rotateX(-PI/2) inverte o sinal do eixo Z derivado do eixo Y do shape.
+    // Por isso invertimos aqui para preservar orientação original no plano XZ.
     const localPoints = mappedPoints.map((p) => [
       p[0] - centerX,
-      p[1] - centerY,
+      -(p[1] - centerY),
     ]);
 
     const shape = new THREE.Shape();
@@ -156,7 +301,6 @@ const Building = memo(function Building({ building, roads }) {
 
     // Fazer a extrusão apentar para o eixo Y
     geometry.rotateX(-Math.PI / 2);
-    geometry.translate(0, depth / 2, 0);
 
     const color = building.color || 0xa9a9a9;
 
