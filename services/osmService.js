@@ -389,7 +389,9 @@ function createSemaphore(limit) {
 }
 
 function pruneCache(cache, activeKeys, maxCachedTiles) {
-  if (cache.size <= maxCachedTiles) return;
+  // Poda mais agressiva para tiles não-ativos
+  const targetSize = Math.max(maxCachedTiles * 0.75, maxCachedTiles - 20);
+  if (cache.size <= targetSize) return;
 
   const removable = [];
   for (const entry of cache.values()) {
@@ -400,7 +402,7 @@ function pruneCache(cache, activeKeys, maxCachedTiles) {
 
   removable.sort((a, b) => (a.lastUsed || 0) - (b.lastUsed || 0));
 
-  while (cache.size > maxCachedTiles && removable.length > 0) {
+  while (cache.size > targetSize && removable.length > 0) {
     const entry = removable.shift();
     cache.delete(entry.key);
   }

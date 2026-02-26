@@ -23,6 +23,37 @@ const orientationCache = new Map();
 // Cache de geometrias de ruas para evitar recomputos
 const roadGeomCache = new Map();
 
+// Componente para renderizar terreno base infinito
+const InfiniteGround = memo(function InfiniteGround({ tileSize = 1000 }) {
+  // Renderiza uma grade de planos que cobrem o campo de visão em torno do observador
+  const tiles = [];
+  const gridRange = 5; // 11x11 tiles = 9x9 metros ao redor do observador
+
+  for (let x = -gridRange; x <= gridRange; x++) {
+    for (let z = -gridRange; z <= gridRange; z++) {
+      const posX = x * tileSize;
+      const posZ = z * tileSize;
+      const key = `ground-${x}-${z}`;
+      tiles.push(
+        <mesh
+          key={key}
+          rotation={[-Math.PI / 2, 0, 0]}
+          position={[posX, 0, posZ]}
+        >
+          <planeGeometry args={[tileSize, tileSize]} />
+          <meshStandardMaterial
+            color={0x8ebe6c}
+            roughness={1}
+            metalness={0}
+          />
+        </mesh>,
+      );
+    }
+  }
+
+  return <group>{tiles}</group>;
+});
+
 function mapToSceneCoord(p) {
   if (!p) return [0, 0];
   return [MIRROR_X ? -p[0] : p[0], p[1]];
@@ -331,6 +362,24 @@ const Road = memo(function Road({ road }) {
     return null;
   }
 
+  const groupRef = useRef();
+
+  // Fade-in animado para novos tiles
+  useFrame(({ clock }) => {
+    if (groupRef.current && !groupRef.current.userData.initialFrame) {
+      groupRef.current.userData.initialFrame = true;
+      groupRef.current.userData.spawnTime = clock.getElapsedTime();
+    }
+    
+    if (groupRef.current && groupRef.current.userData.spawnTime !== undefined) {
+      const elapsed = clock.getElapsedTime() - groupRef.current.userData.spawnTime;
+      const fadeInDuration = 0.3; // 300ms fade in
+      if (elapsed < fadeInDuration) {
+        groupRef.current.userData.opacity = Math.min(1, elapsed / fadeInDuration);
+      }
+    }
+  });
+
   try {
     // Converter pontos para coordenadas da cena
     const pts = road.points.map((p) => mapToSceneCoord(p));
@@ -461,7 +510,7 @@ const Road = memo(function Road({ road }) {
     const outlineColor = 0x000000;
 
     return (
-      <group position={[anchor[0], 0, anchor[1]]}>
+      <group ref={groupRef} position={[anchor[0], 0, anchor[1]]}>
         <mesh geometry={outlineGeom} position={[0, 0, 0]}>
           <meshStandardMaterial
             color={outlineColor}
@@ -779,11 +828,8 @@ function SceneContent({
 
       {/* Grupo que contém todo o mapa já relativo ao observador */}
       <group position={worldShift}>
-        {/* Solo (ground) */}
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]}>
-          <planeGeometry args={[2000, 2000]} />
-          <meshStandardMaterial color={0x8ebe6c} roughness={1} metalness={0} />
-        </mesh>
+        {/* Terreno base infinito */}
+        <InfiniteGround tileSize={1000} />
 
         {visibleRoads.map((road) => (
           <Road key={`r-${road.id}`} road={road} />
