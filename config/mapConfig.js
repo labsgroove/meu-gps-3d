@@ -12,8 +12,15 @@ export const MAP_CONFIG = {
   MAX_CONCURRENT_TILE_FETCHES: 4,
   BLOCKING_TILE_COUNT: 3,
   REALTIME_REFRESH_DEBOUNCE_MS: 150,
-  ENABLE_AMENITIES: false,
+  ENABLE_AMENITIES: true,
+  ENABLE_GREEN_AREAS: true,
+  ENABLE_WATER_AREAS: true,
+  ENABLE_WATERWAYS: true,
+  ENABLE_RAILWAYS: true,
+  ENABLE_TRANSIT_STOPS: true,
   ROAD_SIMPLIFY_TOLERANCE_METERS: 1.5,
+  WATERWAY_SIMPLIFY_TOLERANCE_METERS: 1.2,
+  RAILWAY_SIMPLIFY_TOLERANCE_METERS: 1.0,
 
   // Distância mínima em metros para atualizar o mapa
   UPDATE_DISTANCE_INTERVAL: 100,
@@ -102,6 +109,22 @@ export const MAP_CONFIG = {
     footway: 1.5,
   },
 
+  WATERWAY_WIDTHS: {
+    river: 5,
+    canal: 3.5,
+    stream: 1.8,
+    ditch: 1.2,
+    drain: 1.1,
+  },
+
+  RAILWAY_WIDTHS: {
+    rail: 2.2,
+    subway: 1.8,
+    tram: 1.4,
+    light_rail: 1.8,
+    narrow_gauge: 1.6,
+  },
+
   // Cores de prédios por tipo
   BUILDING_COLORS: {
     residential: 0xd4a574,
@@ -144,6 +167,59 @@ export const MAP_CONFIG = {
     theatre: 0xff00ff,
     supermarket: 0xff0000,
     bakery: 0xffa500,
+  },
+
+  GREEN_AREA_COLORS: {
+    park: 0x66bb6a,
+    garden: 0x7bcf7f,
+    pitch: 0x8bcf7a,
+    golf_course: 0x7aaa58,
+    playground: 0x78b764,
+    recreation_ground: 0x6cbf6e,
+    forest: 0x417d44,
+    wood: 0x3d6d3f,
+    grass: 0x86c96f,
+    meadow: 0x9ad382,
+    village_green: 0x7fc76b,
+    grassland: 0x93c970,
+    scrub: 0x7ba06a,
+  },
+
+  WATER_AREA_COLORS: {
+    water: 0x4d9de0,
+    wetland: 0x4aa4b8,
+    bay: 0x3e8ec8,
+    reservoir: 0x3f88c5,
+    basin: 0x4f97cc,
+    riverbank: 0x4a90e2,
+    swimming_pool: 0x3ab7ff,
+  },
+
+  WATERWAY_COLORS: {
+    river: 0x2f7fd7,
+    canal: 0x3689d8,
+    stream: 0x3f9ae0,
+    ditch: 0x5aa7de,
+    drain: 0x64b0e4,
+  },
+
+  RAILWAY_COLORS: {
+    rail: 0x5c5c5c,
+    subway: 0x666666,
+    tram: 0x7a5f48,
+    light_rail: 0x706c62,
+    narrow_gauge: 0x7f7f7f,
+  },
+
+  TRANSIT_COLORS: {
+    station: 0x22c55e,
+    halt: 0x3ecf7a,
+    platform: 0x44c0c0,
+    stop_position: 0xff66c4,
+    bus_stop: 0xf59e0b,
+    tram_stop: 0x14b8a6,
+    subway_entrance: 0xa855f7,
+    stop: 0xff6b6b,
   },
 };
 

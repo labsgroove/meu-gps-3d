@@ -1,4 +1,4 @@
-import React, { useRef, useState, memo, useEffect } from "react";
+import React, { useRef, useState, memo, useEffect, useMemo } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
@@ -41,11 +41,7 @@ const InfiniteGround = memo(function InfiniteGround({ tileSize = 1000 }) {
           position={[posX, 0, posZ]}
         >
           <planeGeometry args={[tileSize, tileSize]} />
-          <meshStandardMaterial
-            color={0x8ebe6c}
-            roughness={1}
-            metalness={0}
-          />
+          <meshStandardMaterial color={0x8ebe6c} roughness={1} metalness={0} />
         </mesh>,
       );
     }
@@ -56,7 +52,9 @@ const InfiniteGround = memo(function InfiniteGround({ tileSize = 1000 }) {
 
 function mapToSceneCoord(p) {
   if (!p) return [0, 0];
-  return [MIRROR_X ? -p[0] : p[0], p[1]];
+  const x = MIRROR_X ? -p[0] : p[0];
+  const z = Array.isArray(p) && p.length >= 3 ? p[2] : p[1];
+  return [x, z];
 }
 
 function locationDeltaMeters(currentLocation, anchorLocation) {
@@ -370,12 +368,16 @@ const Road = memo(function Road({ road }) {
       groupRef.current.userData.initialFrame = true;
       groupRef.current.userData.spawnTime = clock.getElapsedTime();
     }
-    
+
     if (groupRef.current && groupRef.current.userData.spawnTime !== undefined) {
-      const elapsed = clock.getElapsedTime() - groupRef.current.userData.spawnTime;
+      const elapsed =
+        clock.getElapsedTime() - groupRef.current.userData.spawnTime;
       const fadeInDuration = 0.3; // 300ms fade in
       if (elapsed < fadeInDuration) {
-        groupRef.current.userData.opacity = Math.min(1, elapsed / fadeInDuration);
+        groupRef.current.userData.opacity = Math.min(
+          1,
+          elapsed / fadeInDuration,
+        );
       }
     }
   });
@@ -552,7 +554,7 @@ const Amenity = memo(function Amenity({ amenity }) {
   try {
     const pos = mapToSceneCoord(amenity.position);
     return (
-      <mesh position={[pos[0], amenity.position[2] || 1, pos[1]]}>
+      <mesh position={[pos[0], amenity.position[1] || 1, pos[1]]}>
         <cylinderGeometry args={[0.8, 0.8, 2, 8]} />
         <meshStandardMaterial
           color={amenity.color || 0x00ffff}
@@ -562,6 +564,116 @@ const Amenity = memo(function Amenity({ amenity }) {
     );
   } catch (e) {
     console.warn("Amenity render error:", e.message);
+    return null;
+  }
+});
+
+const AreaSurface = memo(function AreaSurface({
+  area,
+  defaultColor = 0x6ba368,
+  baseY = 0.03,
+  opacity = 1,
+}) {
+  const areaMesh = useMemo(() => {
+    if (!area?.points || area.points.length < 3) return null;
+    const mappedPoints = normalizePolygonPoints(
+      area.points.map((p) => mapToSceneCoord(p)),
+    );
+    if (mappedPoints.length < 3) return null;
+
+    const centerX =
+      mappedPoints.reduce((sum, p) => sum + p[0], 0) / mappedPoints.length;
+    const centerZ =
+      mappedPoints.reduce((sum, p) => sum + p[1], 0) / mappedPoints.length;
+    const localPoints = mappedPoints.map((p) => [
+      p[0] - centerX,
+      -(p[1] - centerZ),
+    ]);
+
+    const shape = new THREE.Shape();
+    shape.moveTo(localPoints[0][0], localPoints[0][1]);
+    for (let i = 1; i < localPoints.length; i += 1) {
+      shape.lineTo(localPoints[i][0], localPoints[i][1]);
+    }
+
+    const geometry = new THREE.ShapeGeometry(shape);
+    geometry.rotateX(-Math.PI / 2);
+
+    return {
+      geometry,
+      centerX,
+      centerZ,
+    };
+  }, [area]);
+
+  if (!areaMesh) return null;
+
+  const elevation = baseY + (area.height || 0);
+  return (
+    <mesh
+      geometry={areaMesh.geometry}
+      position={[areaMesh.centerX, elevation, areaMesh.centerZ]}
+    >
+      <meshStandardMaterial
+        color={area.color || defaultColor}
+        roughness={1}
+        metalness={0}
+        transparent={opacity < 1}
+        opacity={opacity}
+        side={THREE.DoubleSide}
+      />
+    </mesh>
+  );
+});
+
+const LinearPath = memo(function LinearPath({
+  feature,
+  defaultColor = 0x5e5e5e,
+  y = 0.24,
+  opacity = 1,
+}) {
+  const lineGeometry = useMemo(() => {
+    if (!feature?.points || feature.points.length < 2) return null;
+    const vectors = feature.points
+      .map((p) => mapToSceneCoord(p))
+      .map((p) => new THREE.Vector3(p[0], y, p[1]));
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setFromPoints(vectors);
+    return geometry;
+  }, [feature, y]);
+
+  if (!lineGeometry) return null;
+
+  return (
+    <line geometry={lineGeometry}>
+      <lineBasicMaterial
+        color={feature.color || defaultColor}
+        transparent={opacity < 1}
+        opacity={opacity}
+      />
+    </line>
+  );
+});
+
+const TransitStop = memo(function TransitStop({ stop }) {
+  if (!stop?.position) return null;
+
+  try {
+    const pos = mapToSceneCoord(stop.position);
+    const size = stop.size || 1.2;
+    return (
+      <mesh position={[pos[0], size * 0.9, pos[1]]}>
+        <coneGeometry args={[size * 0.5, size * 1.8, 6]} />
+        <meshStandardMaterial
+          color={stop.color || 0xff66c4}
+          roughness={0.35}
+          metalness={0.15}
+        />
+      </mesh>
+    );
+  } catch (e) {
+    console.warn("Transit stop render error:", e.message);
     return null;
   }
 });
@@ -619,6 +731,11 @@ function SceneContent({
   const [visibleBuildingIds, setVisibleBuildingIds] = useState(new Set());
   const [visibleRoadIds, setVisibleRoadIds] = useState(new Set());
   const [visibleAmenityIds, setVisibleAmenityIds] = useState(new Set());
+  const [visibleGreenAreaIds, setVisibleGreenAreaIds] = useState(new Set());
+  const [visibleWaterAreaIds, setVisibleWaterAreaIds] = useState(new Set());
+  const [visibleWaterwayIds, setVisibleWaterwayIds] = useState(new Set());
+  const [visibleRailwayIds, setVisibleRailwayIds] = useState(new Set());
+  const [visibleTransitStopIds, setVisibleTransitStopIds] = useState(new Set());
   const frustumRef = useRef(new THREE.Frustum());
 
   // Controlar movimento com WASD
@@ -679,6 +796,11 @@ function SceneContent({
       const visibleBuildings = new Set();
       const visibleRoads = new Set();
       const visibleAmenities = new Set();
+      const visibleGreenAreas = new Set();
+      const visibleWaterAreas = new Set();
+      const visibleWaterways = new Set();
+      const visibleRailways = new Set();
+      const visibleTransitStops = new Set();
 
       // Verificar buildings
       mapData.buildings?.forEach((building) => {
@@ -731,7 +853,7 @@ function SceneContent({
         if (amenity.position) {
           const pos = mapToSceneCoord(amenity.position);
           const amenitySphere = new THREE.Sphere(
-            new THREE.Vector3(pos[0], amenity.position[2] || 1, pos[1]),
+            new THREE.Vector3(pos[0], amenity.position[1] || 1, pos[1]),
             2,
           );
           if (frustumRef.current.intersectsSphere(amenitySphere)) {
@@ -740,9 +862,124 @@ function SceneContent({
         }
       });
 
+      // Verificar áreas verdes
+      mapData.greenAreas?.forEach((area) => {
+        if (area.points && area.points.length >= 3) {
+          const mappedPoints = area.points.map((p) => mapToSceneCoord(p));
+          const centerX =
+            mappedPoints.reduce((sum, p) => sum + p[0], 0) /
+            mappedPoints.length;
+          const centerZ =
+            mappedPoints.reduce((sum, p) => sum + p[1], 0) /
+            mappedPoints.length;
+          const radius =
+            Math.max(
+              ...mappedPoints.map((p) =>
+                Math.sqrt((p[0] - centerX) ** 2 + (p[1] - centerZ) ** 2),
+              ),
+            ) + 6;
+          const areaSphere = new THREE.Sphere(
+            new THREE.Vector3(centerX, 0.05, centerZ),
+            radius,
+          );
+          if (frustumRef.current.intersectsSphere(areaSphere)) {
+            visibleGreenAreas.add(area.id);
+          }
+        }
+      });
+
+      // Verificar áreas de água
+      mapData.waterAreas?.forEach((area) => {
+        if (area.points && area.points.length >= 3) {
+          const mappedPoints = area.points.map((p) => mapToSceneCoord(p));
+          const centerX =
+            mappedPoints.reduce((sum, p) => sum + p[0], 0) /
+            mappedPoints.length;
+          const centerZ =
+            mappedPoints.reduce((sum, p) => sum + p[1], 0) /
+            mappedPoints.length;
+          const radius =
+            Math.max(
+              ...mappedPoints.map((p) =>
+                Math.sqrt((p[0] - centerX) ** 2 + (p[1] - centerZ) ** 2),
+              ),
+            ) + 6;
+          const areaSphere = new THREE.Sphere(
+            new THREE.Vector3(centerX, 0.05, centerZ),
+            radius,
+          );
+          if (frustumRef.current.intersectsSphere(areaSphere)) {
+            visibleWaterAreas.add(area.id);
+          }
+        }
+      });
+
+      // Verificar cursos d'água
+      mapData.waterways?.forEach((waterway) => {
+        if (waterway.points && waterway.points.length >= 2) {
+          const pts = waterway.points.map((p) => mapToSceneCoord(p));
+          const minX = Math.min(...pts.map((p) => p[0]));
+          const maxX = Math.max(...pts.map((p) => p[0]));
+          const minZ = Math.min(...pts.map((p) => p[1]));
+          const maxZ = Math.max(...pts.map((p) => p[1]));
+          const centerX = (minX + maxX) / 2;
+          const centerZ = (minZ + maxZ) / 2;
+          const radius =
+            Math.sqrt((maxX - minX) ** 2 + (maxZ - minZ) ** 2) / 2 + 10;
+          const waterwaySphere = new THREE.Sphere(
+            new THREE.Vector3(centerX, 0.25, centerZ),
+            radius,
+          );
+          if (frustumRef.current.intersectsSphere(waterwaySphere)) {
+            visibleWaterways.add(waterway.id);
+          }
+        }
+      });
+
+      // Verificar trilhos
+      mapData.railways?.forEach((railway) => {
+        if (railway.points && railway.points.length >= 2) {
+          const pts = railway.points.map((p) => mapToSceneCoord(p));
+          const minX = Math.min(...pts.map((p) => p[0]));
+          const maxX = Math.max(...pts.map((p) => p[0]));
+          const minZ = Math.min(...pts.map((p) => p[1]));
+          const maxZ = Math.max(...pts.map((p) => p[1]));
+          const centerX = (minX + maxX) / 2;
+          const centerZ = (minZ + maxZ) / 2;
+          const radius =
+            Math.sqrt((maxX - minX) ** 2 + (maxZ - minZ) ** 2) / 2 + 10;
+          const railwaySphere = new THREE.Sphere(
+            new THREE.Vector3(centerX, 0.28, centerZ),
+            radius,
+          );
+          if (frustumRef.current.intersectsSphere(railwaySphere)) {
+            visibleRailways.add(railway.id);
+          }
+        }
+      });
+
+      // Verificar pontos de transporte
+      mapData.transitStops?.forEach((stop) => {
+        if (stop.position) {
+          const pos = mapToSceneCoord(stop.position);
+          const stopSphere = new THREE.Sphere(
+            new THREE.Vector3(pos[0], 1.2, pos[1]),
+            2.2,
+          );
+          if (frustumRef.current.intersectsSphere(stopSphere)) {
+            visibleTransitStops.add(stop.id);
+          }
+        }
+      });
+
       setVisibleBuildingIds(visibleBuildings);
       setVisibleRoadIds(visibleRoads);
       setVisibleAmenityIds(visibleAmenities);
+      setVisibleGreenAreaIds(visibleGreenAreas);
+      setVisibleWaterAreaIds(visibleWaterAreas);
+      setVisibleWaterwayIds(visibleWaterways);
+      setVisibleRailwayIds(visibleRailways);
+      setVisibleTransitStopIds(visibleTransitStops);
     }
 
     const keys = keysPressed.current;
@@ -796,6 +1033,11 @@ function SceneContent({
   const buildings = mapData.buildings || [];
   const roads = mapData.roads || [];
   const amenities = mapData.amenities || [];
+  const greenAreas = mapData.greenAreas || [];
+  const waterAreas = mapData.waterAreas || [];
+  const waterways = mapData.waterways || [];
+  const railways = mapData.railways || [];
+  const transitStops = mapData.transitStops || [];
   const observerDelta = locationDeltaMeters(location, renderAnchor);
   const deltaScene = mapToSceneCoord(observerDelta);
   const maxShift = MAP_CONFIG.ACTIVE_RADIUS_METERS * 0.65;
@@ -811,6 +1053,19 @@ function SceneContent({
   );
   const visibleRoads = roads.filter((r) => visibleRoadIds.has(r.id));
   const visibleAmenities = amenities.filter((a) => visibleAmenityIds.has(a.id));
+  const visibleGreenAreas = greenAreas.filter((g) =>
+    visibleGreenAreaIds.has(g.id),
+  );
+  const visibleWaterAreas = waterAreas.filter((w) =>
+    visibleWaterAreaIds.has(w.id),
+  );
+  const visibleWaterways = waterways.filter((w) =>
+    visibleWaterwayIds.has(w.id),
+  );
+  const visibleRailways = railways.filter((r) => visibleRailwayIds.has(r.id));
+  const visibleTransitStops = transitStops.filter((t) =>
+    visibleTransitStopIds.has(t.id),
+  );
 
   return (
     <>
@@ -831,6 +1086,46 @@ function SceneContent({
         {/* Terreno base infinito */}
         <InfiniteGround tileSize={1000} />
 
+        {visibleGreenAreas.map((area) => (
+          <AreaSurface
+            key={`g-${area.id}`}
+            area={area}
+            defaultColor={0x66bb6a}
+            baseY={0.02}
+            opacity={0.92}
+          />
+        ))}
+
+        {visibleWaterAreas.map((area) => (
+          <AreaSurface
+            key={`w-${area.id}`}
+            area={area}
+            defaultColor={0x4d9de0}
+            baseY={0.028}
+            opacity={0.82}
+          />
+        ))}
+
+        {visibleWaterways.map((waterway) => (
+          <LinearPath
+            key={`ww-${waterway.id}`}
+            feature={waterway}
+            defaultColor={0x2f7fd7}
+            y={0.24}
+            opacity={0.95}
+          />
+        ))}
+
+        {visibleRailways.map((railway) => (
+          <LinearPath
+            key={`rw-${railway.id}`}
+            feature={railway}
+            defaultColor={0x5c5c5c}
+            y={0.26}
+            opacity={0.95}
+          />
+        ))}
+
         {visibleRoads.map((road) => (
           <Road key={`r-${road.id}`} road={road} />
         ))}
@@ -845,6 +1140,10 @@ function SceneContent({
 
         {visibleAmenities.map((amenity) => (
           <Amenity key={`a-${amenity.id}`} amenity={amenity} />
+        ))}
+
+        {visibleTransitStops.map((stop) => (
+          <TransitStop key={`t-${stop.id}`} stop={stop} />
         ))}
       </group>
 

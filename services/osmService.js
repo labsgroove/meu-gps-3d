@@ -6,8 +6,56 @@ import { MAP_CONFIG } from "../config/mapConfig.js";
 const OVERPASS_URL = "https://overpass-api.de/api/interpreter";
 const EARTH_RADIUS_METERS = 6378137;
 
-function createEmptyMapData(includeAmenities = true) {
-  return { buildings: [], roads: [], amenities: [] };
+const GREEN_LEISURE_VALUES = new Set([
+  "park",
+  "garden",
+  "pitch",
+  "golf_course",
+  "playground",
+  "recreation_ground",
+]);
+const GREEN_LANDUSE_VALUES = new Set([
+  "forest",
+  "grass",
+  "meadow",
+  "village_green",
+  "recreation_ground",
+  "allotments",
+]);
+const GREEN_NATURAL_VALUES = new Set(["wood", "grassland", "scrub"]);
+const WATER_NATURAL_VALUES = new Set(["water", "wetland", "bay"]);
+const WATER_LANDUSE_VALUES = new Set(["reservoir", "basin", "salt_pond"]);
+const TRANSIT_PUBLIC_VALUES = new Set(["platform", "station", "stop_position"]);
+const TRANSIT_RAILWAY_VALUES = new Set([
+  "station",
+  "halt",
+  "tram_stop",
+  "subway_entrance",
+  "stop",
+]);
+
+function createLayerFlags() {
+  return {
+    includeAmenities: MAP_CONFIG.ENABLE_AMENITIES !== false,
+    includeGreenAreas: MAP_CONFIG.ENABLE_GREEN_AREAS !== false,
+    includeWaterAreas: MAP_CONFIG.ENABLE_WATER_AREAS !== false,
+    includeWaterways: MAP_CONFIG.ENABLE_WATERWAYS !== false,
+    includeRailways: MAP_CONFIG.ENABLE_RAILWAYS !== false,
+    includeTransitStops: MAP_CONFIG.ENABLE_TRANSIT_STOPS !== false,
+  };
+}
+
+function createEmptyMapData() {
+  return {
+    buildings: [],
+    roads: [],
+    amenities: [],
+    greenAreas: [],
+    waterAreas: [],
+    waterways: [],
+    railways: [],
+    transitStops: [],
+  };
 }
 
 function clampLatitude(latitude) {
@@ -42,16 +90,46 @@ function latLonToLocalMeters(latitude, longitude, centerLat, centerLon) {
 
 function buildOverpassQuery(
   { south, west, north, east },
-  includeAmenities = true,
+  layerFlags = createLayerFlags(),
 ) {
-  const amenityFilter = includeAmenities
+  const amenityFilter = layerFlags.includeAmenities
     ? `node["amenity"](${south},${west},${north},${east});`
     : "";
+  const greenAreaFilter = layerFlags.includeGreenAreas
+    ? `
+    way["leisure"~"park|garden|pitch|golf_course|playground|recreation_ground"](${south},${west},${north},${east});
+    way["landuse"~"forest|grass|meadow|village_green|recreation_ground|allotments"](${south},${west},${north},${east});
+    way["natural"~"wood|grassland|scrub"](${south},${west},${north},${east});`
+    : "";
+  const waterAreaFilter = layerFlags.includeWaterAreas
+    ? `
+    way["natural"~"water|wetland|bay"](${south},${west},${north},${east});
+    way["landuse"~"reservoir|basin|salt_pond"](${south},${west},${north},${east});
+    way["waterway"="riverbank"](${south},${west},${north},${east});
+    way["leisure"="swimming_pool"](${south},${west},${north},${east});`
+    : "";
+  const waterwayFilter = layerFlags.includeWaterways
+    ? `way["waterway"](${south},${west},${north},${east});`
+    : "";
+  const railwayFilter = layerFlags.includeRailways
+    ? `way["railway"](${south},${west},${north},${east});`
+    : "";
+  const transitFilter = layerFlags.includeTransitStops
+    ? `
+    node["public_transport"~"platform|station|stop_position"](${south},${west},${north},${east});
+    node["highway"="bus_stop"](${south},${west},${north},${east});
+    node["railway"~"station|halt|tram_stop|subway_entrance|stop"](${south},${west},${north},${east});`
+    : "";
 
-  return `[out:json];(
+  return `[out:json][timeout:30];(
     way["building"](${south},${west},${north},${east});
     way["highway"](${south},${west},${north},${east});
     ${amenityFilter}
+    ${greenAreaFilter}
+    ${waterAreaFilter}
+    ${waterwayFilter}
+    ${railwayFilter}
+    ${transitFilter}
   );out geom;`;
 }
 
@@ -101,20 +179,20 @@ export async function fetchMapData(latitude, longitude, radiusKm = 0.5) {
       east: longitude + lonOffset,
     };
 
-    const includeAmenities = MAP_CONFIG.ENABLE_AMENITIES !== false;
-    const query = buildOverpassQuery(bounds, includeAmenities);
+    const layerFlags = createLayerFlags();
+    const query = buildOverpassQuery(bounds, layerFlags);
     const data = await fetchOverpassJson(query);
-    if (!data) return createEmptyMapData(includeAmenities);
+    if (!data) return createEmptyMapData();
 
     return parseOsmData(data, {
       mode: "local",
       centerLat: latitude,
       centerLon: longitude,
-      includeAmenities,
+      layerFlags,
     });
   } catch (error) {
     console.error("Erro ao buscar dados OSM:", error?.message || String(error));
-    return createEmptyMapData(MAP_CONFIG.ENABLE_AMENITIES !== false);
+    return createEmptyMapData();
   }
 }
 
@@ -122,8 +200,24 @@ function parseOsmData(data, options) {
   const buildings = [];
   const roads = [];
   const amenities = [];
+  const greenAreas = [];
+  const waterAreas = [];
+  const waterways = [];
+  const railways = [];
+  const transitStops = [];
 
-  if (!data?.elements) return { buildings, roads, amenities };
+  if (!data?.elements) {
+    return {
+      buildings,
+      roads,
+      amenities,
+      greenAreas,
+      waterAreas,
+      waterways,
+      railways,
+      transitStops,
+    };
+  }
 
   const toPoint =
     options.mode === "global"
@@ -133,33 +227,91 @@ function parseOsmData(data, options) {
         }
       : (lat, lon) =>
           latLonToLocalMeters(lat, lon, options.centerLat, options.centerLon);
+  const layerFlags = options.layerFlags || createLayerFlags();
 
   for (const element of data.elements) {
     if (element.type !== "way") continue;
+    const tags = element.tags || {};
 
-    if (element.tags?.building) {
-      buildings.push(parseBuilding(element, toPoint));
-      continue;
+    if (tags.building) {
+      const parsed = parseBuilding(element, toPoint);
+      if (parsed) buildings.push(parsed);
     }
 
-    if (element.tags?.highway) {
-      roads.push(parseRoad(element, toPoint));
+    if (tags.highway) {
+      const parsed = parseRoad(element, toPoint);
+      if (parsed) roads.push(parsed);
+    }
+
+    if (layerFlags.includeGreenAreas && isGreenAreaWay(tags)) {
+      const parsed = parseGreenArea(element, toPoint);
+      if (parsed) greenAreas.push(parsed);
+    }
+
+    if (layerFlags.includeWaterAreas && isWaterAreaWay(tags)) {
+      const parsed = parseWaterArea(element, toPoint);
+      if (parsed) waterAreas.push(parsed);
+    }
+
+    if (layerFlags.includeWaterways && isWaterwayWay(tags)) {
+      const parsed = parseWaterway(element, toPoint);
+      if (parsed) waterways.push(parsed);
+    }
+
+    if (layerFlags.includeRailways && isRailwayWay(tags)) {
+      const parsed = parseRailway(element, toPoint);
+      if (parsed) railways.push(parsed);
     }
   }
 
-  if (options.includeAmenities !== false) {
-    for (const element of data.elements) {
-      if (element.type !== "node" || !element.tags?.amenity) continue;
-      amenities.push(parseAmenity(element, toPoint));
+  for (const element of data.elements) {
+    if (element.type !== "node") continue;
+    const tags = element.tags || {};
+
+    if (layerFlags.includeAmenities && tags.amenity) {
+      const parsed = parseAmenity(element, toPoint);
+      if (parsed) amenities.push(parsed);
+    }
+
+    if (layerFlags.includeTransitStops && isTransitNode(tags)) {
+      const parsed = parseTransitStop(element, toPoint);
+      if (parsed) transitStops.push(parsed);
     }
   }
 
-  return { buildings, roads, amenities };
+  return {
+    buildings,
+    roads,
+    amenities,
+    greenAreas,
+    waterAreas,
+    waterways,
+    railways,
+    transitStops,
+  };
+}
+
+function normalizeWayPoints(points) {
+  if (!Array.isArray(points) || points.length < 2) return points || [];
+  const first = points[0];
+  const last = points[points.length - 1];
+  if (
+    first &&
+    last &&
+    Math.abs(first[0] - last[0]) < 0.001 &&
+    Math.abs(first[1] - last[1]) < 0.001
+  ) {
+    return points.slice(0, -1);
+  }
+  return points;
 }
 
 function parseBuilding(way, toPoint) {
   const coordinates = way.geometry || [];
-  const points = coordinates.map((coord) => toPoint(coord.lat, coord.lon));
+  const points = normalizeWayPoints(
+    coordinates.map((coord) => toPoint(coord.lat, coord.lon)),
+  );
+  if (points.length < 3) return null;
 
   return {
     id: way.id,
@@ -174,9 +326,11 @@ function parseBuilding(way, toPoint) {
 function parseRoad(way, toPoint) {
   const coordinates = way.geometry || [];
   const rawPoints = coordinates.map((coord) => toPoint(coord.lat, coord.lon));
+  if (rawPoints.length < 2) return null;
 
   const tolerance = MAP_CONFIG.ROAD_SIMPLIFY_TOLERANCE_METERS ?? 1.0;
   const points = simplifyPath(rawPoints, tolerance);
+  if (!points || points.length < 2) return null;
 
   return {
     id: way.id,
@@ -189,6 +343,7 @@ function parseRoad(way, toPoint) {
 }
 
 function parseAmenity(node, toPoint) {
+  if (!Number.isFinite(node?.lat) || !Number.isFinite(node?.lon)) return null;
   const [x, z] = toPoint(node.lat, node.lon);
 
   return {
@@ -199,6 +354,133 @@ function parseAmenity(node, toPoint) {
     color: getAmenityColor(node.tags.amenity),
     tags: node.tags,
   };
+}
+
+function parseGreenArea(way, toPoint) {
+  const coordinates = way.geometry || [];
+  const points = normalizeWayPoints(
+    coordinates.map((coord) => toPoint(coord.lat, coord.lon)),
+  );
+  if (points.length < 3) return null;
+
+  const greenType = getGreenAreaType(way.tags || {});
+  return {
+    id: way.id,
+    type: "greenArea",
+    greenType,
+    points,
+    color: getGreenAreaColor(greenType),
+    height: 0.02,
+    tags: way.tags,
+  };
+}
+
+function parseWaterArea(way, toPoint) {
+  const coordinates = way.geometry || [];
+  const points = normalizeWayPoints(
+    coordinates.map((coord) => toPoint(coord.lat, coord.lon)),
+  );
+  if (points.length < 3) return null;
+
+  const waterType = getWaterAreaType(way.tags || {});
+  return {
+    id: way.id,
+    type: "waterArea",
+    waterType,
+    points,
+    color: getWaterAreaColor(waterType),
+    height: 0.015,
+    tags: way.tags,
+  };
+}
+
+function parseWaterway(way, toPoint) {
+  const coordinates = way.geometry || [];
+  const rawPoints = coordinates.map((coord) => toPoint(coord.lat, coord.lon));
+  if (rawPoints.length < 2) return null;
+
+  const tolerance = MAP_CONFIG.WATERWAY_SIMPLIFY_TOLERANCE_METERS ?? 1.2;
+  const points = simplifyPath(rawPoints, tolerance);
+  if (!points || points.length < 2) return null;
+
+  const waterwayType = way.tags?.waterway || "default";
+  return {
+    id: way.id,
+    type: "waterway",
+    waterwayType,
+    points,
+    width: getWaterwayWidth(waterwayType),
+    color: getWaterwayColor(waterwayType),
+    tags: way.tags,
+  };
+}
+
+function parseRailway(way, toPoint) {
+  const coordinates = way.geometry || [];
+  const rawPoints = coordinates.map((coord) => toPoint(coord.lat, coord.lon));
+  if (rawPoints.length < 2) return null;
+
+  const tolerance = MAP_CONFIG.RAILWAY_SIMPLIFY_TOLERANCE_METERS ?? 1.0;
+  const points = simplifyPath(rawPoints, tolerance);
+  if (!points || points.length < 2) return null;
+
+  const railwayType = way.tags?.railway || "rail";
+  return {
+    id: way.id,
+    type: "railway",
+    railwayType,
+    points,
+    width: getRailwayWidth(railwayType),
+    color: getRailwayColor(railwayType),
+    tags: way.tags,
+  };
+}
+
+function parseTransitStop(node, toPoint) {
+  if (!Number.isFinite(node?.lat) || !Number.isFinite(node?.lon)) return null;
+  const [x, z] = toPoint(node.lat, node.lon);
+  const transitType = getTransitType(node.tags || {});
+
+  return {
+    id: node.id,
+    type: "transitStop",
+    transitType,
+    position: [x, 0, z],
+    color: getTransitColor(transitType),
+    size: getTransitSize(transitType),
+    tags: node.tags,
+  };
+}
+
+function isGreenAreaWay(tags) {
+  return (
+    GREEN_LEISURE_VALUES.has(tags.leisure) ||
+    GREEN_LANDUSE_VALUES.has(tags.landuse) ||
+    GREEN_NATURAL_VALUES.has(tags.natural)
+  );
+}
+
+function isWaterAreaWay(tags) {
+  if (WATER_NATURAL_VALUES.has(tags.natural)) return true;
+  if (WATER_LANDUSE_VALUES.has(tags.landuse)) return true;
+  if (tags.waterway === "riverbank") return true;
+  if (tags.leisure === "swimming_pool") return true;
+  return false;
+}
+
+function isWaterwayWay(tags) {
+  return Boolean(tags.waterway && tags.waterway !== "riverbank");
+}
+
+function isRailwayWay(tags) {
+  return Boolean(tags.railway);
+}
+
+function isTransitNode(tags) {
+  if (TRANSIT_PUBLIC_VALUES.has(tags.public_transport)) return true;
+  if (tags.highway === "bus_stop") return true;
+  if (TRANSIT_RAILWAY_VALUES.has(tags.railway)) return true;
+  return false;
 }
 
 function getHeightFromTags(tags) {
@@ -217,6 +499,8 @@ function getHeightFromTags(tags) {
 
 function getBuildingColor(tags) {
   const buildingType = tags.building;
+  const configColor = MAP_CONFIG.BUILDING_COLORS?.[buildingType];
+  if (Number.isFinite(configColor)) return configColor;
 
   switch (buildingType) {
     case "residential":
@@ -238,6 +522,8 @@ function getBuildingColor(tags) {
 
 function getRoadWidth(tags) {
   const highway = tags.highway;
+  const configWidth = MAP_CONFIG.ROAD_WIDTHS?.[highway];
+  if (Number.isFinite(configWidth)) return configWidth;
 
   switch (highway) {
     case "motorway":
@@ -260,6 +546,8 @@ function getRoadWidth(tags) {
 
 function getRoadColor(tags) {
   const highway = tags.highway;
+  const configColor = MAP_CONFIG.ROAD_COLORS?.[highway];
+  if (Number.isFinite(configColor)) return configColor;
 
   switch (highway) {
     case "motorway":
@@ -280,19 +568,82 @@ function getRoadColor(tags) {
 }
 
 function getAmenityColor(amenityType) {
-  const colors = {
-    hospital: 0xff0000,
-    school: 0x0000ff,
-    restaurant: 0xff8c00,
-    cafe: 0xffa500,
-    park: 0x00ff00,
-    parking: 0xffff00,
-    bank: 0x800080,
-    pharmacy: 0x008000,
-    bus_station: 0xff1493,
-  };
+  const configColor = MAP_CONFIG.AMENITY_COLORS?.[amenityType];
+  if (Number.isFinite(configColor)) return configColor;
+  return 0x00ffff;
+}
 
-  return colors[amenityType] || 0x00ffff;
+function getGreenAreaType(tags) {
+  return tags.leisure || tags.landuse || tags.natural || "default";
+}
+
+function getWaterAreaType(tags) {
+  return tags.natural || tags.landuse || tags.water || tags.waterway || "water";
+}
+
+function getGreenAreaColor(type) {
+  const configColor = MAP_CONFIG.GREEN_AREA_COLORS?.[type];
+  if (Number.isFinite(configColor)) return configColor;
+  return 0x6ba368;
+}
+
+function getWaterAreaColor(type) {
+  const configColor = MAP_CONFIG.WATER_AREA_COLORS?.[type];
+  if (Number.isFinite(configColor)) return configColor;
+  return 0x4a90e2;
+}
+
+function getWaterwayWidth(type) {
+  const configWidth = MAP_CONFIG.WATERWAY_WIDTHS?.[type];
+  if (Number.isFinite(configWidth)) return configWidth;
+  if (type === "river") return 5;
+  if (type === "canal") return 3;
+  if (type === "stream") return 1.5;
+  return 2.2;
+}
+
+function getWaterwayColor(type) {
+  const configColor = MAP_CONFIG.WATERWAY_COLORS?.[type];
+  if (Number.isFinite(configColor)) return configColor;
+  return 0x3b82f6;
+}
+
+function getRailwayWidth(type) {
+  const configWidth = MAP_CONFIG.RAILWAY_WIDTHS?.[type];
+  if (Number.isFinite(configWidth)) return configWidth;
+  if (type === "subway") return 1.8;
+  if (type === "tram") return 1.2;
+  return 2;
+}
+
+function getRailwayColor(type) {
+  const configColor = MAP_CONFIG.RAILWAY_COLORS?.[type];
+  if (Number.isFinite(configColor)) return configColor;
+  return 0x5e5e5e;
+}
+
+function getTransitType(tags) {
+  if (tags.public_transport) return tags.public_transport;
+  if (tags.highway === "bus_stop") return "bus_stop";
+  if (tags.railway) return tags.railway;
+  return "stop";
+}
+
+function getTransitColor(type) {
+  const configColor = MAP_CONFIG.TRANSIT_COLORS?.[type];
+  if (Number.isFinite(configColor)) return configColor;
+  if (type === "bus_stop") return 0xf59e0b;
+  if (type === "station") return 0x22c55e;
+  if (type === "tram_stop") return 0x14b8a6;
+  if (type === "subway_entrance") return 0xa855f7;
+  return 0xff66c4;
+}
+
+function getTransitSize(type) {
+  if (type === "station") return 2.2;
+  if (type === "platform") return 1.6;
+  if (type === "bus_stop") return 1.4;
+  return 1.2;
 }
 
 function getTileKey(tileX, tileY) {
@@ -409,14 +760,14 @@ function pruneCache(cache, activeKeys, maxCachedTiles) {
 }
 
 async function fetchTileMapData(tileX, tileY, tileSizeMeters) {
-  const includeAmenities = MAP_CONFIG.ENABLE_AMENITIES !== false;
+  const layerFlags = createLayerFlags();
   const bounds = tileBoundsToLatLon(tileX, tileY, tileSizeMeters);
-  const query = buildOverpassQuery(bounds, includeAmenities);
+  const query = buildOverpassQuery(bounds, layerFlags);
   const data = await fetchOverpassJson(query);
-  if (!data) return createEmptyMapData(includeAmenities);
+  if (!data) return createEmptyMapData();
   return parseOsmData(data, {
     mode: "global",
-    includeAmenities,
+    layerFlags,
   });
 }
 
@@ -446,10 +797,56 @@ function transformToObserverFrame(tileData, observerWorld) {
     ],
   }));
 
+  const outGreenAreas = tileData.greenAreas.map((area) => ({
+    ...area,
+    points: area.points.map((point) => [
+      point[0] - observerWorld.x,
+      point[1] - observerWorld.y,
+    ]),
+  }));
+
+  const outWaterAreas = tileData.waterAreas.map((area) => ({
+    ...area,
+    points: area.points.map((point) => [
+      point[0] - observerWorld.x,
+      point[1] - observerWorld.y,
+    ]),
+  }));
+
+  const outWaterways = tileData.waterways.map((waterway) => ({
+    ...waterway,
+    points: waterway.points.map((point) => [
+      point[0] - observerWorld.x,
+      point[1] - observerWorld.y,
+    ]),
+  }));
+
+  const outRailways = tileData.railways.map((railway) => ({
+    ...railway,
+    points: railway.points.map((point) => [
+      point[0] - observerWorld.x,
+      point[1] - observerWorld.y,
+    ]),
+  }));
+
+  const outTransitStops = tileData.transitStops.map((stop) => ({
+    ...stop,
+    position: [
+      stop.position[0] - observerWorld.x,
+      stop.position[1],
+      stop.position[2] - observerWorld.y,
+    ],
+  }));
+
   return {
     buildings: outBuildings,
     roads: outRoads,
     amenities: outAmenities,
+    greenAreas: outGreenAreas,
+    waterAreas: outWaterAreas,
+    waterways: outWaterways,
+    railways: outRailways,
+    transitStops: outTransitStops,
   };
 }
 
@@ -554,7 +951,10 @@ export function createRealtimeMapLoader(options = {}) {
         loadTile(tile.tileX, tile.tileY)
           .then((entry) => {
             if (onTileReady && entry.status === "ready") {
-              const transformed = transformToObserverFrame(entry.data, observerWorld);
+              const transformed = transformToObserverFrame(
+                entry.data,
+                observerWorld,
+              );
               onTileReady(transformed);
             }
           })
@@ -596,6 +996,11 @@ export function createRealtimeMapLoader(options = {}) {
     const seenBuildings = new Set();
     const seenRoads = new Set();
     const seenAmenities = new Set();
+    const seenGreenAreas = new Set();
+    const seenWaterAreas = new Set();
+    const seenWaterways = new Set();
+    const seenRailways = new Set();
+    const seenTransitStops = new Set();
     const merged = createEmptyMapData();
     let loadedTiles = 0;
 
@@ -623,6 +1028,36 @@ export function createRealtimeMapLoader(options = {}) {
         if (seenAmenities.has(amenity.id)) continue;
         seenAmenities.add(amenity.id);
         merged.amenities.push(amenity);
+      }
+
+      for (const greenArea of transformed.greenAreas) {
+        if (seenGreenAreas.has(greenArea.id)) continue;
+        seenGreenAreas.add(greenArea.id);
+        merged.greenAreas.push(greenArea);
+      }
+
+      for (const waterArea of transformed.waterAreas) {
+        if (seenWaterAreas.has(waterArea.id)) continue;
+        seenWaterAreas.add(waterArea.id);
+        merged.waterAreas.push(waterArea);
+      }
+
+      for (const waterway of transformed.waterways) {
+        if (seenWaterways.has(waterway.id)) continue;
+        seenWaterways.add(waterway.id);
+        merged.waterways.push(waterway);
+      }
+
+      for (const railway of transformed.railways) {
+        if (seenRailways.has(railway.id)) continue;
+        seenRailways.add(railway.id);
+        merged.railways.push(railway);
+      }
+
+      for (const stop of transformed.transitStops) {
+        if (seenTransitStops.has(stop.id)) continue;
+        seenTransitStops.add(stop.id);
+        merged.transitStops.push(stop);
       }
     }
 

@@ -171,6 +171,21 @@ export default function AppWeb() {
                 const existingAmenityIds = new Set(
                   prevData.amenities?.map((a) => a.id) || [],
                 );
+                const existingGreenAreaIds = new Set(
+                  prevData.greenAreas?.map((g) => g.id) || [],
+                );
+                const existingWaterAreaIds = new Set(
+                  prevData.waterAreas?.map((w) => w.id) || [],
+                );
+                const existingWaterwayIds = new Set(
+                  prevData.waterways?.map((w) => w.id) || [],
+                );
+                const existingRailwayIds = new Set(
+                  prevData.railways?.map((r) => r.id) || [],
+                );
+                const existingTransitStopIds = new Set(
+                  prevData.transitStops?.map((t) => t.id) || [],
+                );
 
                 return {
                   ...prevData,
@@ -188,6 +203,36 @@ export default function AppWeb() {
                     ...prevData.amenities,
                     ...tileData.amenities.filter(
                       (a) => !existingAmenityIds.has(a.id),
+                    ),
+                  ],
+                  greenAreas: [
+                    ...(prevData.greenAreas || []),
+                    ...(tileData.greenAreas || []).filter(
+                      (g) => !existingGreenAreaIds.has(g.id),
+                    ),
+                  ],
+                  waterAreas: [
+                    ...(prevData.waterAreas || []),
+                    ...(tileData.waterAreas || []).filter(
+                      (w) => !existingWaterAreaIds.has(w.id),
+                    ),
+                  ],
+                  waterways: [
+                    ...(prevData.waterways || []),
+                    ...(tileData.waterways || []).filter(
+                      (w) => !existingWaterwayIds.has(w.id),
+                    ),
+                  ],
+                  railways: [
+                    ...(prevData.railways || []),
+                    ...(tileData.railways || []).filter(
+                      (r) => !existingRailwayIds.has(r.id),
+                    ),
+                  ],
+                  transitStops: [
+                    ...(prevData.transitStops || []),
+                    ...(tileData.transitStops || []).filter(
+                      (t) => !existingTransitStopIds.has(t.id),
                     ),
                   ],
                 };
@@ -553,6 +598,21 @@ export default function AppWeb() {
               </div>
               <div className="status-meta">
                 {mapData?.roads?.length || 0} ruas
+              </div>
+              <div className="status-meta">
+                {(mapData?.greenAreas?.length || 0) +
+                  (mapData?.waterAreas?.length || 0)}{" "}
+                áreas naturais
+              </div>
+              <div className="status-meta">
+                {(mapData?.waterways?.length || 0) +
+                  (mapData?.railways?.length || 0)}{" "}
+                vias especiais
+              </div>
+              <div className="status-meta">
+                {(mapData?.amenities?.length || 0) +
+                  (mapData?.transitStops?.length || 0)}{" "}
+                pontos de interesse
               </div>
             </div>
             <div className="status-card">
