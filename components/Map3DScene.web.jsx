@@ -726,6 +726,12 @@ function SceneContent({
     deltaZ: 0,
     elapsedMs: 0,
   });
+  const movementVectors = useRef({
+    cameraDirection: new THREE.Vector3(),
+    forward: new THREE.Vector3(),
+    right: new THREE.Vector3(),
+    up: new THREE.Vector3(0, 1, 0),
+  });
 
   // Estado para frustum culling
   const [visibleBuildingIds, setVisibleBuildingIds] = useState(new Set());
@@ -984,21 +990,40 @@ function SceneContent({
 
     const keys = keysPressed.current;
     const mobile = moveRef?.current || {};
-    const inputX =
-      (keys["a"] || mobile.left ? 1 : 0) - (keys["d"] || mobile.right ? 1 : 0);
-    const inputZ =
+    const strafeInput =
+      (keys["d"] || mobile.right ? 1 : 0) - (keys["a"] || mobile.left ? 1 : 0);
+    const forwardInput =
       (keys["w"] || mobile.up ? 1 : 0) - (keys["s"] || mobile.down ? 1 : 0);
 
-    if (inputX !== 0 || inputZ !== 0) {
+    if (strafeInput !== 0 || forwardInput !== 0) {
       const speedMetersPerSecond = MAP_CONFIG.MOVEMENT_SPEED_MPS || 20;
-      const inputLength = Math.hypot(inputX, inputZ) || 1;
-      const normalizedX = inputX / inputLength;
-      const normalizedZ = inputZ / inputLength;
+      const vectors = movementVectors.current;
+      camera.getWorldDirection(vectors.cameraDirection);
+
+      vectors.forward.set(
+        vectors.cameraDirection.x,
+        0,
+        vectors.cameraDirection.z,
+      );
+      if (vectors.forward.lengthSq() < 0.000001) {
+        vectors.forward.set(0, 0, -1);
+      } else {
+        vectors.forward.normalize();
+      }
+      vectors.right.crossVectors(vectors.forward, vectors.up).normalize();
+
+      const moveSceneX =
+        vectors.forward.x * forwardInput + vectors.right.x * strafeInput;
+      const moveSceneZ =
+        vectors.forward.z * forwardInput + vectors.right.z * strafeInput;
+      const moveLength = Math.hypot(moveSceneX, moveSceneZ) || 1;
+      const normalizedSceneX = moveSceneX / moveLength;
+      const normalizedSceneZ = moveSceneZ / moveLength;
       const stepMeters = speedMetersPerSecond * delta;
 
       movementAccumulator.current.deltaX +=
-        (MIRROR_X ? -normalizedX : normalizedX) * stepMeters;
-      movementAccumulator.current.deltaZ += normalizedZ * stepMeters;
+        (MIRROR_X ? -normalizedSceneX : normalizedSceneX) * stepMeters;
+      movementAccumulator.current.deltaZ += normalizedSceneZ * stepMeters;
     }
 
     movementAccumulator.current.elapsedMs += delta * 1000;
