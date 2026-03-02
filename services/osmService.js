@@ -3,6 +3,7 @@
 import { simplifyPath } from "../utils/geoUtils.js";
 import { MAP_CONFIG } from "../config/mapConfig.js";
 import { createTileDiskCache } from "./tileDiskCache.js";
+import { createTilePriorityManager } from "./tilePriorityManager.js";
 
 const OVERPASS_URL = "https://overpass-api.de/api/interpreter";
 const EARTH_RADIUS_METERS = 6378137;
@@ -1060,17 +1061,6 @@ export function createRealtimeMapLoader(options = {}) {
       diskCache && tiles.length > 0
         ? new Set(tiles.map((tile) => getDiskTileKeyFor(tile.tileX, tile.tileY)))
         : null;
-    const blockingTileCount = Math.max(
-      1,
-      options.blockingTileCount ?? MAP_CONFIG.BLOCKING_TILE_COUNT ?? 2,
-    );
-    const blockingTiles = tiles.slice(0, blockingTileCount);
-    const backgroundTiles = tiles.slice(blockingTileCount);
-
-    const blockingPromises = blockingTiles.map((tile) =>
-      loadTile(tile.tileX, tile.tileY),
-    );
-    await Promise.all(blockingPromises);
 
     const onBackgroundLoaded =
       typeof options.onBackgroundLoaded === "function"
@@ -1080,9 +1070,33 @@ export function createRealtimeMapLoader(options = {}) {
     const onTileReady =
       typeof options.onTileReady === "function" ? options.onTileReady : null;
 
-    // Renderização incremental: chamar callback para cada tile que fica pronto
-    if (backgroundTiles.length > 0) {
-      backgroundTiles.forEach((tile) => {
+    // Usar sistema de prioridades dinâmicas para garantir núcleo consistente
+    const priorityManager = createTilePriorityManager(
+      activeRadiusMeters,
+      tileSizeMeters,
+    );
+
+    const layers = priorityManager.layerTiles(tiles);
+    const criticalTiles = layers.CRITICAL;
+    const primaryTiles = layers.PRIMARY;
+    const secondaryTiles = layers.SECONDARY;
+
+    // Fase 1: Carregar raio crítico completamente (bloqueante)
+    // Reserva todos os slots para crítico até estar 100% pronto
+    const criticalPromises = criticalTiles.map((tile) =>
+      loadTile(tile.tileX, tile.tileY),
+    );
+    
+    try {
+      await Promise.all(criticalPromises);
+    } catch (e) {
+      console.warn("Erro ao carregar raio crítico:", e.message);
+    }
+
+    // Fase 2: Carregar raio primário incrementalmente
+    // Fire-and-forget com callbacks - não aguarda completação
+    if (primaryTiles.length > 0) {
+      primaryTiles.forEach((tile) => {
         loadTile(tile.tileX, tile.tileY)
           .then((entry) => {
             if (onTileReady && entry.status === "ready") {
@@ -1094,29 +1108,56 @@ export function createRealtimeMapLoader(options = {}) {
             }
           })
           .catch(() => {
-            // Erro ao carregar tile, continuar sem fazer nada
+            // Ignorar erros de tiles periféricos
           });
       });
-
-      // Aguardar que todos os tiles de fundo carreguem
-      Promise.all(
-        backgroundTiles.map((tile) => loadTile(tile.tileX, tile.tileY)),
-      )
-        .then(() => {
-          pruneCache(cache, activeKeys, maxCachedTiles);
-          if (diskCache && protectedDiskKeys) {
-            diskCache.prune({ protectedKeys: protectedDiskKeys });
-          }
-          if (onBackgroundLoaded) onBackgroundLoaded();
-        })
-        .catch(() => {
-          pruneCache(cache, activeKeys, maxCachedTiles);
-          if (diskCache && protectedDiskKeys) {
-            diskCache.prune({ protectedKeys: protectedDiskKeys });
-          }
-        });
     }
 
+    // Fase 3: Carregar raio secundário com baixa prioridade
+    // Completamente assíncrono, não impacta renderização
+    if (secondaryTiles.length > 0) {
+      secondaryTiles.forEach((tile) => {
+        // Adiciona pequeno delay para não competir com primário
+        setTimeout(() => {
+          loadTile(tile.tileX, tile.tileY)
+            .then((entry) => {
+              if (onTileReady && entry.status === "ready") {
+                const transformed = transformToObserverFrame(
+                  entry.data,
+                  observerWorld,
+                );
+                onTileReady(transformed);
+              }
+            })
+            .catch(() => {
+              // Ignorar completamente
+            });
+        }, 50);
+      });
+    }
+
+    // Aguardar todos os tiles (primário + secundário) em background
+    const allBackgroundPromises = [
+      ...primaryTiles.map((tile) => loadTile(tile.tileX, tile.tileY)),
+      ...secondaryTiles.map((tile) => loadTile(tile.tileX, tile.tileY)),
+    ];
+
+    Promise.all(allBackgroundPromises)
+      .then(() => {
+        pruneCache(cache, activeKeys, maxCachedTiles);
+        if (diskCache && protectedDiskKeys) {
+          diskCache.prune({ protectedKeys: protectedDiskKeys });
+        }
+        if (onBackgroundLoaded) onBackgroundLoaded();
+      })
+      .catch(() => {
+        pruneCache(cache, activeKeys, maxCachedTiles);
+        if (diskCache && protectedDiskKeys) {
+          diskCache.prune({ protectedKeys: protectedDiskKeys });
+        }
+      });
+
+    // Poda imediata após crítico estar pronto
     pruneCache(cache, activeKeys, maxCachedTiles);
     if (diskCache && protectedDiskKeys) {
       diskCache.prune({ protectedKeys: protectedDiskKeys });
