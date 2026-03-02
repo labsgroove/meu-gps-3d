@@ -60,6 +60,11 @@ export const MAP_CONFIG = {
   // Largura das estradas em metros (multiplicador global para deixar vias mais largas)
   ROAD_WIDTH_MULTIPLIER: 1.6,
 
+  // Sobreposição de tiles (overlap) - percentual para tampar falhas entre tiles
+  // 0.1 = 10% de margem para cada lado
+  // Quanto maior, mais cobertura de ruas em fronteiras, mas mais dados carregados
+  TILE_BOUNDS_OVERLAP_PERCENT: 0.1,
+
   // Configurações de iluminação
   LIGHTING: {
     AMBIENT_LIGHT_INTENSITY: 0.7,

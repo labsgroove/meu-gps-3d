@@ -693,6 +693,21 @@ function tileBoundsToLatLon(tileX, tileY, tileSizeMeters) {
   };
 }
 
+function expandBoundsWithOverlap(bounds, overlapPercent = 0.1) {
+  if (overlapPercent <= 0) return bounds;
+  
+  // Calcular a expansão em graus
+  const latExpand = (bounds.north - bounds.south) * overlapPercent;
+  const lonExpand = (bounds.east - bounds.west) * overlapPercent;
+  
+  return {
+    south: bounds.south - latExpand,
+    north: bounds.north + latExpand,
+    west: bounds.west - lonExpand,
+    east: bounds.east + lonExpand,
+  };
+}
+
 function tileCenterMeters(tileX, tileY, tileSizeMeters) {
   return {
     x: (tileX + 0.5) * tileSizeMeters,
@@ -780,8 +795,13 @@ function pruneCache(cache, activeKeys, maxCachedTiles) {
 
 async function fetchTileMapData(tileX, tileY, tileSizeMeters, layerFlags) {
   const effectiveFlags = layerFlags || createLayerFlags();
-  const bounds = tileBoundsToLatLon(tileX, tileY, tileSizeMeters);
-  const query = buildOverpassQuery(bounds, effectiveFlags);
+  const baseBounds = tileBoundsToLatLon(tileX, tileY, tileSizeMeters);
+  
+  // Expandir bounds com overlap para conectar ruas entre tiles
+  const overlapPercent = MAP_CONFIG.TILE_BOUNDS_OVERLAP_PERCENT ?? 0.1;
+  const expandedBounds = expandBoundsWithOverlap(baseBounds, overlapPercent);
+  
+  const query = buildOverpassQuery(expandedBounds, effectiveFlags);
   const data = await fetchOverpassJson(query);
   if (!data) return createEmptyMapData();
   return parseOsmData(data, {
