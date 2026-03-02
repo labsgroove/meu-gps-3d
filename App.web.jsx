@@ -623,6 +623,18 @@ export default function AppWeb() {
               <div className="status-meta">
                 Cache: {mapStats?.cachedTiles || 0}
               </div>
+              {mapStats?.diskCache && (
+                <div className="status-meta">
+                  Disco: {mapStats.diskCache.hits}/{mapStats.diskCache.misses}{" "}
+                  (stale {mapStats.diskCache.staleServed})
+                </div>
+              )}
+              {mapStats?.network && (
+                <div className="status-meta">
+                  API: {mapStats.network.fetches} req (err{" "}
+                  {mapStats.network.errors})
+                </div>
+              )}
             </div>
             <div className="status-card">
               <div className="status-title">Estado</div>

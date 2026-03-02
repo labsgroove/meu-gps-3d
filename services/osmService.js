@@ -2,6 +2,7 @@
 // Serviço para buscar dados de OpenStreetMap via Overpass API
 import { simplifyPath } from "../utils/geoUtils.js";
 import { MAP_CONFIG } from "../config/mapConfig.js";
+import { createTileDiskCache } from "./tileDiskCache.js";
 
 const OVERPASS_URL = "https://overpass-api.de/api/interpreter";
 const EARTH_RADIUS_METERS = 6378137;
@@ -43,6 +44,24 @@ function createLayerFlags() {
     includeRailways: MAP_CONFIG.ENABLE_RAILWAYS !== false,
     includeTransitStops: MAP_CONFIG.ENABLE_TRANSIT_STOPS !== false,
   };
+}
+
+function layerFlagsSignature(flags) {
+  const f = flags || createLayerFlags();
+  return [
+    "A",
+    f.includeAmenities ? 1 : 0,
+    "G",
+    f.includeGreenAreas ? 1 : 0,
+    "WA",
+    f.includeWaterAreas ? 1 : 0,
+    "WW",
+    f.includeWaterways ? 1 : 0,
+    "R",
+    f.includeRailways ? 1 : 0,
+    "T",
+    f.includeTransitStops ? 1 : 0,
+  ].join("");
 }
 
 function createEmptyMapData() {
@@ -759,15 +778,15 @@ function pruneCache(cache, activeKeys, maxCachedTiles) {
   }
 }
 
-async function fetchTileMapData(tileX, tileY, tileSizeMeters) {
-  const layerFlags = createLayerFlags();
+async function fetchTileMapData(tileX, tileY, tileSizeMeters, layerFlags) {
+  const effectiveFlags = layerFlags || createLayerFlags();
   const bounds = tileBoundsToLatLon(tileX, tileY, tileSizeMeters);
-  const query = buildOverpassQuery(bounds, layerFlags);
+  const query = buildOverpassQuery(bounds, effectiveFlags);
   const data = await fetchOverpassJson(query);
   if (!data) return createEmptyMapData();
   return parseOsmData(data, {
     mode: "global",
-    layerFlags,
+    layerFlags: effectiveFlags,
   });
 }
 
@@ -858,6 +877,29 @@ export function createRealtimeMapLoader(options = {}) {
   const maxConcurrentFetches =
     options.maxConcurrentFetches ?? MAP_CONFIG.MAX_CONCURRENT_TILE_FETCHES;
 
+  const layerFlags = createLayerFlags();
+  const layerFlagsKey = layerFlagsSignature(layerFlags);
+
+  const diskCacheEnabled =
+    options.diskCacheEnabled ?? MAP_CONFIG.TILE_DISK_CACHE_ENABLED;
+  const diskCache = diskCacheEnabled
+    ? createTileDiskCache({
+        ttlMs: MAP_CONFIG.TILE_DISK_CACHE_TTL_MS,
+        maxEntries: MAP_CONFIG.TILE_DISK_CACHE_MAX_ENTRIES,
+        maxStaleMs: MAP_CONFIG.TILE_DISK_CACHE_MAX_STALE_MS,
+      })
+    : null;
+
+  const networkStats = {
+    fetches: 0,
+    errors: 0,
+    revalidations: 0,
+  };
+
+  function getDiskTileKeyFor(tileX, tileY) {
+    return `${tileX}:${tileY}:${tileSizeMeters}:${layerFlagsKey}`;
+  }
+
   const cache = new Map();
   const semaphore = createSemaphore(maxConcurrentFetches);
   let activeKeys = new Set();
@@ -875,6 +917,10 @@ export function createRealtimeMapLoader(options = {}) {
         status: "idle",
         data: createEmptyMapData(),
         promise: null,
+        revalidatePromise: null,
+        diskKey: diskCache ? getDiskTileKeyFor(tileX, tileY) : null,
+        diskStatus: "unknown",
+        diskPromise: null,
         lastUsed: now,
         fetchedAt: 0,
       };
@@ -883,7 +929,55 @@ export function createRealtimeMapLoader(options = {}) {
 
     entry.lastUsed = now;
 
+    if (diskCache && entry.diskStatus === "unknown" && !entry.diskPromise) {
+      const diskKey = entry.diskKey;
+      entry.diskPromise = (async () => {
+        const result = await diskCache.get(diskKey, { now });
+        entry.diskStatus = result.status;
+        if ((result.status === "hit" || result.status === "stale") && result.record?.data) {
+          entry.status = "ready";
+          entry.error = null;
+          entry.data = result.record.data;
+          entry.fetchedAt = result.record.fetchedAt || entry.fetchedAt;
+          entry.lastUsed = now;
+        }
+      })()
+        .catch(() => {
+          entry.diskStatus = "error";
+        })
+        .finally(() => {
+          entry.diskPromise = null;
+        });
+    }
+
     if (entry.status === "ready" && !entry.promise) {
+      if (diskCache && entry.diskStatus === "stale" && !entry.revalidatePromise) {
+        entry.revalidatePromise = (async () => {
+          await semaphore.acquire();
+          try {
+            networkStats.fetches += 1;
+            networkStats.revalidations += 1;
+            const fresh = await fetchTileMapData(
+              tileX,
+              tileY,
+              tileSizeMeters,
+              layerFlags,
+            );
+            entry.data = fresh;
+            entry.status = "ready";
+            entry.error = null;
+            entry.fetchedAt = Date.now();
+            await diskCache.set(entry.diskKey, fresh, { now: entry.fetchedAt });
+            entry.diskStatus = "hit";
+          } catch (error) {
+            networkStats.errors += 1;
+          } finally {
+            entry.lastUsed = Date.now();
+            semaphore.release();
+            entry.revalidatePromise = null;
+          }
+        })();
+      }
       return entry;
     }
 
@@ -892,14 +986,31 @@ export function createRealtimeMapLoader(options = {}) {
     }
 
     entry.promise = (async () => {
+      if (entry.diskPromise) {
+        try {
+          await entry.diskPromise;
+        } catch {
+          // ignorar erro de disco e seguir via rede
+        }
+        if (entry.status === "ready") {
+          return entry;
+        }
+      }
+
       await semaphore.acquire();
       try {
         entry.status = "loading";
-        entry.data = await fetchTileMapData(tileX, tileY, tileSizeMeters);
+        networkStats.fetches += 1;
+        entry.data = await fetchTileMapData(tileX, tileY, tileSizeMeters, layerFlags);
         entry.status = "ready";
         entry.error = null;
         entry.fetchedAt = Date.now();
+        if (diskCache && entry.diskKey) {
+          await diskCache.set(entry.diskKey, entry.data, { now: entry.fetchedAt });
+          entry.diskStatus = "hit";
+        }
       } catch (error) {
+        networkStats.errors += 1;
         entry.status = "error";
         entry.error = error;
         entry.data = createEmptyMapData();
@@ -925,6 +1036,10 @@ export function createRealtimeMapLoader(options = {}) {
     );
 
     activeKeys = new Set(tiles.map((tile) => tile.key));
+    const protectedDiskKeys =
+      diskCache && tiles.length > 0
+        ? new Set(tiles.map((tile) => getDiskTileKeyFor(tile.tileX, tile.tileY)))
+        : null;
     const blockingTileCount = Math.max(
       1,
       options.blockingTileCount ?? MAP_CONFIG.BLOCKING_TILE_COUNT ?? 2,
@@ -969,14 +1084,23 @@ export function createRealtimeMapLoader(options = {}) {
       )
         .then(() => {
           pruneCache(cache, activeKeys, maxCachedTiles);
+          if (diskCache && protectedDiskKeys) {
+            diskCache.prune({ protectedKeys: protectedDiskKeys });
+          }
           if (onBackgroundLoaded) onBackgroundLoaded();
         })
         .catch(() => {
           pruneCache(cache, activeKeys, maxCachedTiles);
+          if (diskCache && protectedDiskKeys) {
+            diskCache.prune({ protectedKeys: protectedDiskKeys });
+          }
         });
     }
 
     pruneCache(cache, activeKeys, maxCachedTiles);
+    if (diskCache && protectedDiskKeys) {
+      diskCache.prune({ protectedKeys: protectedDiskKeys });
+    }
   }
 
   function getActiveMapData(observerLat, observerLon) {
@@ -1069,6 +1193,8 @@ export function createRealtimeMapLoader(options = {}) {
         cachedTiles: cache.size,
         activeTiles: keysToMerge.size,
         loadedTiles,
+        diskCache: diskCache ? diskCache.getStats() : null,
+        network: { ...networkStats },
       },
     };
   }
@@ -1079,6 +1205,8 @@ export function createRealtimeMapLoader(options = {}) {
       activeTiles: activeKeys.size,
       activeRadiusMeters,
       tileSizeMeters,
+      diskCache: diskCache ? diskCache.getStats() : null,
+      network: { ...networkStats },
     };
   }
 

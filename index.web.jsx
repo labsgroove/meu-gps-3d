@@ -2,6 +2,9 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import AppWeb from './App.web.jsx';
+import { registerSW } from 'virtual:pwa-register';
+
+registerSW({ immediate: true });
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(

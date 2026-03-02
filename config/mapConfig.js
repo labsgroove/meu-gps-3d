@@ -12,6 +12,14 @@ export const MAP_CONFIG = {
   MAX_CONCURRENT_TILE_FETCHES: 4,
   BLOCKING_TILE_COUNT: 3,
   REALTIME_REFRESH_DEBOUNCE_MS: 150,
+  // Cache persistente no dispositivo (IndexedDB)
+  TILE_DISK_CACHE_ENABLED: true,
+  // Tiles mudam pouco; TTL curto mantém UX boa sem "stale" demais.
+  TILE_DISK_CACHE_TTL_MS: 24 * 60 * 60 * 1000,
+  // Quantidade de tiles guardados entre sessões (LRU).
+  TILE_DISK_CACHE_MAX_ENTRIES: 250,
+  // Se estiver offline/Overpass instável, ainda pode servir tiles vencidos até esse limite.
+  TILE_DISK_CACHE_MAX_STALE_MS: 7 * 24 * 60 * 60 * 1000,
   ENABLE_AMENITIES: true,
   ENABLE_GREEN_AREAS: true,
   ENABLE_WATER_AREAS: true,
