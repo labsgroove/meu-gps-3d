@@ -1271,9 +1271,12 @@ export function createRealtimeMapLoader(options = {}) {
     };
   }
 
-  function clear() {
+  async function clear() {
     cache.clear();
     activeKeys = new Set();
+    if (diskCache) {
+      await diskCache.clear();
+    }
   }
 
   return {

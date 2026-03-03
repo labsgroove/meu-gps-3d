@@ -47,6 +47,7 @@ export default function AppWeb() {
   const [inputError, setInputError] = useState(null);
   const [locationEnabled, setLocationEnabled] = useState(false);
   const [mapStats, setMapStats] = useState(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const watchIdRef = useRef(null);
   const deviceLocationRef = useRef(null);
@@ -510,6 +511,34 @@ export default function AppWeb() {
     });
   };
 
+  const handleRefreshMapData = useCallback(async () => {
+    if (isRefreshing || !location) return;
+
+    setIsRefreshing(true);
+    try {
+      const loader = loaderRef.current;
+      if (loader) {
+        // Limpar cache em memória e cache de disco
+        await loader.clear();
+      }
+
+      // Recarregar dados da localização atual
+      const normalized = normalizeLocation(location);
+      lastEnsureRef.current = {
+        latitude: Number.NaN,
+        longitude: Number.NaN,
+        time: 0,
+      };
+      await refreshMapForLocation(normalized, { forceEnsure: true });
+      setMapError(false);
+    } catch (refreshError) {
+      console.error("Erro ao fazer refresh do mapa:", refreshError);
+      setMapError(true);
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [location, isRefreshing, refreshMapForLocation]);
+
   const isReady = Boolean(mapData && location && !loading);
   const canSubmitCoordinates = coordInput.trim().length > 0;
   const loadingMessage =
@@ -572,6 +601,19 @@ export default function AppWeb() {
               WASD ou controle mobile para mover o observador. Arraste para
               girar.
             </div>
+
+            <button
+              type="button"
+              className="refresh-btn"
+              onClick={handleRefreshMapData}
+              disabled={isRefreshing}
+              title="Recarregar tiles do mapa"
+              aria-label="Recarregar mapa"
+            >
+              <span className={isRefreshing ? "refresh-icon-spinning" : "refresh-icon"}>
+                ⟳
+              </span>
+            </button>
 
             <Map3DSceneWeb
               mapData={mapData}
